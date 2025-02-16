@@ -4,23 +4,30 @@ import { appendHeaderToDocument } from './headerUpdateHelper.js';
 import { logger } from './logger.js';
 import { getLocalStorage, setLocalStorage, getSyncStorage } from './storage.js';
 
-/**
- * Helper function to retrieve Outline config and execute a callback.
- * @param {Function} sendResponse
- * @param {Function} callback - async function(outlineUrl, apiToken)
- */
+/* --- Change 3: Cache the configuration values --- */
+let cachedConfig = null;
+
 async function withOutlineConfig(sendResponse, callback) {
     try {
-        const { outlineUrl, apiToken } = await getSyncStorage(["outlineUrl", "apiToken"]);
-        if (!outlineUrl || !apiToken) {
-            sendResponse({ success: false, error: "Outline settings not configured. Please update options." });
-            return;
+        if (!cachedConfig) {
+            const { outlineUrl, apiToken } = await getSyncStorage(["outlineUrl", "apiToken"]);
+            if (!outlineUrl || !apiToken) {
+                sendResponse({ success: false, error: "Outline settings not configured. Please update options." });
+                return;
+            }
+            cachedConfig = { outlineUrl, apiToken };
         }
-        await callback(outlineUrl, apiToken);
+        await callback(cachedConfig.outlineUrl, cachedConfig.apiToken);
     } catch (err) {
         logger.error("withOutlineConfig error:", err);
         sendResponse({ success: false, error: err.message });
     }
+}
+
+/* --- Change 2: Unified error response helper --- */
+function respondWithError(sendResponse, error) {
+    logger.error("Responding with error:", error);
+    sendResponse({ success: false, error: error.message || error });
 }
 
 /**
@@ -92,8 +99,7 @@ const actions = {
             }
             sendResponse({ success: true, url: docUrl });
         } catch (err) {
-            logger.error("Error in saveGoogleDoc action:", err);
-            sendResponse({ success: false, error: err.message });
+            respondWithError(sendResponse, err);
         }
     },
     "importGoogleSheet": async (request, sendResponse, outlineUrl, apiToken) => {
@@ -141,8 +147,7 @@ const actions = {
             }
             sendResponse({ success: true, url: docUrl });
         } catch (err) {
-            logger.error("Error in importGoogleSheet action:", err);
-            sendResponse({ success: false, error: err.message });
+            respondWithError(sendResponse, err);
         }
     },
     "appendHeader": async (request, sendResponse, outlineUrl, apiToken) => {
@@ -157,8 +162,7 @@ const actions = {
             );
             sendResponse({ success: true, result: res });
         } catch (err) {
-            logger.error("Error in appendHeader action:", err);
-            sendResponse({ success: false, error: err.message });
+            respondWithError(sendResponse, err);
         }
     }
 };
@@ -169,7 +173,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             try {
                 await actions[request.action](request, sendResponse, outlineUrl, apiToken);
             } catch (error) {
-                sendResponse({ success: false, error: error.message });
+                respondWithError(sendResponse, error);
             }
         } else {
             sendResponse({ success: false, error: "Unknown action" });

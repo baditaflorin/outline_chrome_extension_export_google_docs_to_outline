@@ -7,36 +7,66 @@ class OutlineAPI {
 
     /**
      * Centralized request helper.
-     * Automatically attaches the Authorization header and JSON Content-Type (if needed),
-     * checks for errors, and returns the parsed JSON response.
+     *
+     * **Change 2:** Supports cancellation via an optional AbortController signal.
+     * **Change 3:** Retries the request automatically for transient errors.
+     * **Change 4:** Logs detailed request and response information.
      *
      * @param {string} endpoint - The full URL to fetch.
      * @param {Object} options - The fetch options.
+     *   - retry {number} (optional): Number of retry attempts on error.
+     *   - retryDelay {number} (optional): Delay between retries in ms (default is 500ms).
+     *   - signal {AbortSignal} (optional): Abort signal to cancel the request.
+     *   - ...rest: All other options passed to fetch.
      * @returns {Promise<Object>} The parsed JSON response.
      */
     async _request(endpoint, options = {}) {
-        // Merge in any existing headers, or create an empty object.
-        const headers = options.headers || {};
+        // Destructure custom options
+        const { retry = 0, retryDelay = 500, signal, ...restOptions } = options;
+        // Use existing headers or create a new object.
+        let headers = restOptions.headers || {};
 
-        // Automatically attach the Authorization header.
+        // Automatically attach the Authorization header if not present.
         if (!headers["Authorization"]) {
             headers["Authorization"] = `Bearer ${this.apiToken}`;
         }
 
         // If a body exists and it's not FormData, ensure the Content-Type header is set.
-        if (options.body && !(options.body instanceof FormData) && !headers["Content-Type"]) {
+        if (restOptions.body && !(restOptions.body instanceof FormData) && !headers["Content-Type"]) {
             headers["Content-Type"] = "application/json";
         }
 
-        const fetchOptions = { ...options, headers };
+        // Combine headers and pass along the signal.
+        const fetchOptions = { ...restOptions, headers, signal };
 
-        const response = await fetch(endpoint, fetchOptions);
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Request failed. Status: ${response.status}, Error: ${errorText}`);
-            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
+        // **Change 4:** Log the request details.
+        console.debug(`[REQUEST] ${fetchOptions.method || "GET"} ${endpoint}`, { headers, body: restOptions.body });
+
+        let attempts = 0;
+        while (true) {
+            try {
+                const response = await fetch(endpoint, fetchOptions);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error(`[ERROR] Request failed. Status: ${response.status}, Error: ${errorText}`);
+                    throw new Error(`Outline API error: ${response.status} - ${errorText}`);
+                }
+                const json = await response.json();
+                console.debug(`[RESPONSE]`, json);
+                return json;
+            } catch (error) {
+                // **Change 3:** If we have retries left, wait and then retry.
+                if (attempts < retry) {
+                    attempts++;
+                    console.warn(
+                        `[WARNING] Request failed (attempt ${attempts}): ${error.message}. Retrying in ${retryDelay}ms...`
+                    );
+                    await new Promise((res) => setTimeout(res, retryDelay));
+                    continue;
+                }
+                throw error;
+            }
         }
-        return await response.json();
     }
 
     async createCollection(collectionName) {
@@ -53,6 +83,7 @@ class OutlineAPI {
         const result = await this._request(endpoint, {
             method: "POST",
             body: JSON.stringify(payload)
+            // You could pass retry: 2 here if desired.
         });
         console.log(`Collection created successfully: ${JSON.stringify(result)}`);
         return result.data.id;
@@ -87,7 +118,7 @@ class OutlineAPI {
         console.log(`Importing document with collectionId: ${collectionId}`);
         const result = await this._request(endpoint, {
             method: "POST",
-            body: formData // No manual Content-Type header for FormData.
+            body: formData // Do not set Content-Type header for FormData.
         });
         console.log(`Document imported successfully: ${JSON.stringify(result)}`);
         return result;
