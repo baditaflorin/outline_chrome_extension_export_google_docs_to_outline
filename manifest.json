@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Google Docs/Sheets to Outline",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Save a Google Docs file (exported as Markdown) or a Google Sheet (exported as TSV renamed to CSV) to your Outline wiki.",
   "permissions": [
     "storage",
