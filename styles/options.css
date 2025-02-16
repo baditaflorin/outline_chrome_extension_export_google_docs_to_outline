@@ -1,0 +1,88 @@
+/* styles/options.css */
+body {
+    background-color: #f5f5f7;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+.container {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    padding: 40px;
+    width: 360px;
+}
+
+h1 {
+    font-size: 24px;
+    color: #333;
+    margin-bottom: 24px;
+    text-align: center;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+label {
+    display: block;
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    font-size: 16px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    transition: border-color 0.3s ease;
+}
+
+input[type="text"]:focus {
+    border-color: #0071e3;
+    outline: none;
+}
+
+.buttons {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+button[type="submit"],
+button#testConnection {
+    flex: 1;
+    padding: 12px;
+    font-size: 16px;
+    color: #fff;
+    background-color: #0071e3;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button#testConnection {
+    background-color: #005bb5;
+}
+
+button[type="submit"]:hover {
+    background-color: #005bb5;
+}
+
+button#testConnection:hover {
+    background-color: #004a99;
+}
+
+#connectionStatus {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}

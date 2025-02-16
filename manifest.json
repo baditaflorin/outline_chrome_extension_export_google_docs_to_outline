@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Google Docs to Outline",
+  "version": "1.0",
+  "description": "Save a Google Docs file (exported as Markdown) to your Outline wiki.",
+  "permissions": [
+    "storage",
+    "scripting",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://docs.google.com/document/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://docs.google.com/document/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Save Google Docs to Outline",
+    "default_popup": "options.html"
+  }
+}
