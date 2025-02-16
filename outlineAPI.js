@@ -5,62 +5,73 @@ class OutlineAPI {
         this.apiToken = apiToken;
     }
 
+    /**
+     * Centralized request helper.
+     * Automatically attaches the Authorization header and JSON Content-Type (if needed),
+     * checks for errors, and returns the parsed JSON response.
+     *
+     * @param {string} endpoint - The full URL to fetch.
+     * @param {Object} options - The fetch options.
+     * @returns {Promise<Object>} The parsed JSON response.
+     */
+    async _request(endpoint, options = {}) {
+        // Merge in any existing headers, or create an empty object.
+        const headers = options.headers || {};
+
+        // Automatically attach the Authorization header.
+        if (!headers["Authorization"]) {
+            headers["Authorization"] = `Bearer ${this.apiToken}`;
+        }
+
+        // If a body exists and it's not FormData, ensure the Content-Type header is set.
+        if (options.body && !(options.body instanceof FormData) && !headers["Content-Type"]) {
+            headers["Content-Type"] = "application/json";
+        }
+
+        const fetchOptions = { ...options, headers };
+
+        const response = await fetch(endpoint, fetchOptions);
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Request failed. Status: ${response.status}, Error: ${errorText}`);
+            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
+        }
+        return await response.json();
+    }
+
     async createCollection(collectionName) {
         const endpoint = `${this.baseUrl}/api/collections.create`;
         console.log(`Creating collection with name: "${collectionName}" at endpoint: ${endpoint}`);
-        const response = await fetch(endpoint, {
+        const payload = {
+            name: collectionName,
+            description: "",
+            permission: "read",
+            color: "#123123",
+            private: false
+        };
+
+        const result = await this._request(endpoint, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${this.apiToken}`
-            },
-            body: JSON.stringify({
-                name: collectionName,
-                description: "",
-                permission: "read",
-                color: "#123123",
-                private: false
-            })
+            body: JSON.stringify(payload)
         });
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to create collection. Status: ${response.status}, Error: ${errorText}`);
-            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
-        }
-        const data = await response.json();
-        console.log(`Collection created successfully: ${JSON.stringify(data)}`);
-        return data.data.id;
+        console.log(`Collection created successfully: ${JSON.stringify(result)}`);
+        return result.data.id;
     }
 
     async createDocument({ title, text, collectionId, publish = true, parentDocumentId = null }) {
         const endpoint = `${this.baseUrl}/api/documents.create`;
-        // Build the payload without parentDocumentId if not provided.
         const payload = { title, text, collectionId, publish };
         if (parentDocumentId && parentDocumentId.trim() !== "") {
             payload.parentDocumentId = parentDocumentId;
         }
         console.log(`Creating document with payload: ${JSON.stringify(payload)}`);
-
-        const response = await fetch(endpoint, {
+        const result = await this._request(endpoint, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${this.apiToken}`
-            },
             body: JSON.stringify(payload)
         });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to create document. Status: ${response.status}, Error: ${errorText}`);
-            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
-        }
-
-        const result = await response.json();
         console.log(`Document created successfully: ${JSON.stringify(result)}`);
         return result;
     }
-
 
     async importDocument({ collectionId, file, parentDocumentId = "", template = false, publish = true }) {
         const endpoint = `${this.baseUrl}/api/documents.import`;
@@ -74,114 +85,56 @@ class OutlineAPI {
         formData.append("publish", publish.toString());
 
         console.log(`Importing document with collectionId: ${collectionId}`);
-        const response = await fetch(endpoint, {
+        const result = await this._request(endpoint, {
             method: "POST",
-            headers: {
-                "Authorization": `Bearer ${this.apiToken}`
-            },
-            body: formData
+            body: formData // No manual Content-Type header for FormData.
         });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to import document. Status: ${response.status}, Error: ${errorText}`);
-            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
-        }
-        const result = await response.json();
         console.log(`Document imported successfully: ${JSON.stringify(result)}`);
         return result;
     }
 
     async updateDocument({ id, title = "", text, append = false, publish = true, done = false }) {
         const endpoint = `${this.baseUrl}/api/documents.update`;
-        const payload = {
-            id,
-            title,
-            text,
-            append,
-            publish,
-            done
-        };
+        const payload = { id, title, text, append, publish, done };
         console.log(`Updating document ${id} with payload: ${JSON.stringify(payload)}`);
-        const response = await fetch(endpoint, {
+        const result = await this._request(endpoint, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${this.apiToken}`
-            },
             body: JSON.stringify(payload)
         });
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to update document ${id}. Status: ${response.status}, Error: ${errorText}`);
-            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
-        }
-        const result = await response.json();
         console.log(`Document ${id} updated successfully: ${JSON.stringify(result)}`);
         return result;
     }
 
-    // New helper to fetch the current document content.
     async getDocument(id) {
         const endpoint = `${this.baseUrl}/api/documents.info`;
         console.log(`Fetching document info for id: ${id}`);
-        const response = await fetch(endpoint, {
+        const result = await this._request(endpoint, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${this.apiToken}`
-            },
             body: JSON.stringify({ id })
         });
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to fetch document info for ${id}. Status: ${response.status}, Error: ${errorText}`);
-            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
-        }
-        const result = await response.json();
         console.log(`Fetched document info: ${JSON.stringify(result)}`);
         return result;
     }
 
-    /**
-     * New helper to retrieve collection information.
-     * This calls the /collections.info endpoint as documented.
-     * @param {string} collectionId
-     * @returns {Promise<Object>}
-     */
     async getCollection(collectionId) {
         console.log(`Fetching collection info for id: ${collectionId}`);
         const endpoint = `${this.baseUrl}/api/collections.info`;
-        const response = await fetch(endpoint, {
+        const result = await this._request(endpoint, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${this.apiToken}`
-            },
             body: JSON.stringify({ id: collectionId })
         });
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to fetch collection info for ${collectionId}. Status: ${response.status}, Error: ${errorText}`);
-            throw new Error(`Outline API error: ${response.status} - ${errorText}`);
-        }
-        const result = await response.json();
         console.log(`Fetched collection info: ${JSON.stringify(result)}`);
 
-        // Check if the collection is marked as deleted.
         if (result.data && result.data.deletedAt) {
             console.error(`Collection ${collectionId} is marked as deleted.`);
             throw new Error(`Collection ${collectionId} is deleted.`);
         }
-        // **New Check:** If the collection is archived, treat it as invalid.
         if (result.data && result.data.archivedAt) {
             console.error(`Collection ${collectionId} is archived.`);
             throw new Error(`Collection ${collectionId} is archived.`);
         }
-
         return result;
     }
-
 }
 
 export default OutlineAPI;
