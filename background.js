@@ -1,57 +1,8 @@
 // background.js
 import OutlineAPI from './outlineAPI.js';
 import { appendHeaderToDocument } from './headerUpdateHelper.js';
-
-/**
- * Promise-based helper to get items from chrome.storage.local.
- * @param {string|string[]} key
- * @returns {Promise<Object>}
- */
-function getLocalStorage(key) {
-    return new Promise((resolve, reject) => {
-        chrome.storage.local.get(key, (result) => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-            } else {
-                resolve(result);
-            }
-        });
-    });
-}
-
-/**
- * Promise-based helper to set items in chrome.storage.local.
- * @param {Object} obj
- * @returns {Promise<void>}
- */
-function setLocalStorage(obj) {
-    return new Promise((resolve, reject) => {
-        chrome.storage.local.set(obj, () => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-            } else {
-                resolve();
-            }
-        });
-    });
-}
-
-/**
- * Promise-based helper to get items from chrome.storage.sync.
- * @param {string|string[]} key
- * @returns {Promise<Object>}
- */
-function getSyncStorage(key) {
-    return new Promise((resolve, reject) => {
-        chrome.storage.sync.get(key, (result) => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-            } else {
-                resolve(result);
-            }
-        });
-    });
-}
+import { logger } from './logger.js';
+import { getLocalStorage, setLocalStorage, getSyncStorage } from './storage.js';
 
 /**
  * Helper function to retrieve Outline config and execute a callback.
@@ -67,7 +18,7 @@ async function withOutlineConfig(sendResponse, callback) {
         }
         await callback(outlineUrl, apiToken);
     } catch (err) {
-        console.error("withOutlineConfig error:", err);
+        logger.error("withOutlineConfig error:", err);
         sendResponse({ success: false, error: err.message });
     }
 }
@@ -82,139 +33,147 @@ async function withOutlineConfig(sendResponse, callback) {
  * @returns {Promise<string>} collectionId
  */
 async function getOrCreateCollection(api, storageKey, collectionName) {
-    console.log(`Attempting to retrieve stored collection for key "${storageKey}"...`);
+    logger.info(`Attempting to retrieve stored collection for key "${storageKey}"...`);
     const stored = await getLocalStorage(storageKey);
     let collectionId = stored[storageKey];
 
     if (collectionId) {
-        console.log(`Found stored collection id: ${collectionId}. Verifying its existence...`);
+        logger.info(`Found stored collection id: ${collectionId}. Verifying its existence...`);
         try {
             const collectionInfo = await api.getCollection(collectionId);
-            console.log(`Collection verified: ${JSON.stringify(collectionInfo)}`);
+            logger.info(`Collection verified: ${JSON.stringify(collectionInfo)}`);
         } catch (err) {
-            console.error(`Verification failed for collection ${collectionId}: ${err.message}`);
-            console.log(`Creating new collection "${collectionName}"...`);
+            logger.error(`Verification failed for collection ${collectionId}: ${err.message}`);
+            logger.info(`Creating new collection "${collectionName}"...`);
             collectionId = await api.createCollection(collectionName);
-            console.log(`New collection created: ${collectionId}. Saving to local storage.`);
+            logger.info(`New collection created: ${collectionId}. Saving to local storage.`);
             await setLocalStorage({ [storageKey]: collectionId });
         }
     } else {
-        console.log(`No collection id found for key "${storageKey}". Creating new collection "${collectionName}"...`);
+        logger.info(`No collection id found for key "${storageKey}". Creating new collection "${collectionName}"...`);
         collectionId = await api.createCollection(collectionName);
-        console.log(`New collection created: ${collectionId}. Saving to local storage.`);
+        logger.info(`New collection created: ${collectionId}. Saving to local storage.`);
         await setLocalStorage({ [storageKey]: collectionId });
     }
     return collectionId;
 }
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "saveGoogleDoc") {
-        withOutlineConfig(sendResponse, async (outlineUrl, apiToken) => {
-            try {
-                const api = new OutlineAPI(outlineUrl, apiToken);
-                const collectionId = await getOrCreateCollection(api, "collectionId", "google-docs");
-                console.log(`Using collectionId: ${collectionId} for document creation.`);
+/**
+ * Map of action names to handler functions.
+ * Each handler receives (request, sendResponse, outlineUrl, apiToken).
+ */
+const actions = {
+    "saveGoogleDoc": async (request, sendResponse, outlineUrl, apiToken) => {
+        try {
+            const api = new OutlineAPI(outlineUrl, apiToken);
+            const collectionId = await getOrCreateCollection(api, "collectionId", "google-docs");
+            logger.info(`Using collectionId: ${collectionId} for document creation.`);
 
-                // Create the document on Outline.
-                const res = await api.createDocument({
-                    title: request.title,
-                    text: request.content,
-                    collectionId,
-                    publish: true
-                });
-                console.log(`Document creation response: ${JSON.stringify(res)}`);
+            const res = await api.createDocument({
+                title: request.title,
+                text: request.content,
+                collectionId,
+                publish: true
+            });
+            logger.info(`Document creation response: ${JSON.stringify(res)}`);
 
-                const docId = res.data && res.data.id;
-                const docUrl = docId ? `${outlineUrl}/doc/${docId}` : "";
+            const docId = res.data && res.data.id;
+            const docUrl = docId ? `${outlineUrl}/doc/${docId}` : "";
 
-                // Optionally, update the document with the header.
-                if (docId && request.headerMarkdown) {
-                    const headerPosition = request.headerPosition || 'top';
-                    await appendHeaderToDocument(
-                        outlineUrl,
-                        apiToken,
-                        docId,
-                        request.headerMarkdown,
-                        headerPosition
-                    );
-                }
-                sendResponse({ success: true, url: docUrl });
-            } catch (err) {
-                console.error("Error in saveGoogleDoc action:", err);
-                sendResponse({ success: false, error: err.message });
-            }
-        });
-        return true;
-    } else if (request.action === "importGoogleSheet") {
-        withOutlineConfig(sendResponse, async (outlineUrl, apiToken) => {
-            try {
-                const api = new OutlineAPI(outlineUrl, apiToken);
-                const collectionId = await getOrCreateCollection(api, "collectionId_sheet", "google-sheets");
-                console.log(`Using collectionId: ${collectionId} for sheet import.`);
-
-                // Create a File object from the TSV content.
-                const fileContent = request.fileContent;
-                const fileBlob = new Blob([fileContent], { type: "text/csv" });
-                const fileObj = new File([fileBlob], "import.csv", { type: "text/csv" });
-
-                const res = await api.importDocument({
-                    collectionId,
-                    file: fileObj,
-                    publish: true
-                });
-                console.log(`Import document response: ${JSON.stringify(res)}`);
-
-                const docId = res.data && res.data.id;
-                const docUrl = docId ? `${outlineUrl}/doc/${docId}` : "";
-
-                // Update the document's title if provided.
-                if (docId && request.title) {
-                    const docInfo = await api.getDocument(docId);
-                    const currentText = (docInfo.data && docInfo.data.text) || "";
-                    await api.updateDocument({
-                        id: docId,
-                        title: request.title,
-                        text: currentText,
-                        append: false,
-                        publish: true,
-                        done: true
-                    });
-                }
-
-                if (docId && request.headerMarkdown) {
-                    const headerPosition = request.headerPosition || 'top';
-                    await appendHeaderToDocument(
-                        outlineUrl,
-                        apiToken,
-                        docId,
-                        request.headerMarkdown,
-                        headerPosition
-                    );
-                }
-                sendResponse({ success: true, url: docUrl });
-            } catch (err) {
-                console.error("Error in importGoogleSheet action:", err);
-                sendResponse({ success: false, error: err.message });
-            }
-        });
-        return true;
-    } else if (request.action === "appendHeader") {
-        withOutlineConfig(sendResponse, async (outlineUrl, apiToken) => {
-            try {
+            if (docId && request.headerMarkdown) {
                 const headerPosition = request.headerPosition || 'top';
-                const res = await appendHeaderToDocument(
+                await appendHeaderToDocument(
                     outlineUrl,
                     apiToken,
-                    request.docId,
+                    docId,
                     request.headerMarkdown,
                     headerPosition
                 );
-                sendResponse({ success: true, result: res });
-            } catch (err) {
-                console.error("Error in appendHeader action:", err);
-                sendResponse({ success: false, error: err.message });
             }
-        });
-        return true;
+            sendResponse({ success: true, url: docUrl });
+        } catch (err) {
+            logger.error("Error in saveGoogleDoc action:", err);
+            sendResponse({ success: false, error: err.message });
+        }
+    },
+    "importGoogleSheet": async (request, sendResponse, outlineUrl, apiToken) => {
+        try {
+            const api = new OutlineAPI(outlineUrl, apiToken);
+            const collectionId = await getOrCreateCollection(api, "collectionId_sheet", "google-sheets");
+            logger.info(`Using collectionId: ${collectionId} for sheet import.`);
+
+            const fileContent = request.fileContent;
+            const fileBlob = new Blob([fileContent], { type: "text/csv" });
+            const fileObj = new File([fileBlob], "import.csv", { type: "text/csv" });
+
+            const res = await api.importDocument({
+                collectionId,
+                file: fileObj,
+                publish: true
+            });
+            logger.info(`Import document response: ${JSON.stringify(res)}`);
+
+            const docId = res.data && res.data.id;
+            const docUrl = docId ? `${outlineUrl}/doc/${docId}` : "";
+
+            if (docId && request.title) {
+                const docInfo = await api.getDocument(docId);
+                const currentText = (docInfo.data && docInfo.data.text) || "";
+                await api.updateDocument({
+                    id: docId,
+                    title: request.title,
+                    text: currentText,
+                    append: false,
+                    publish: true,
+                    done: true
+                });
+            }
+
+            if (docId && request.headerMarkdown) {
+                const headerPosition = request.headerPosition || 'top';
+                await appendHeaderToDocument(
+                    outlineUrl,
+                    apiToken,
+                    docId,
+                    request.headerMarkdown,
+                    headerPosition
+                );
+            }
+            sendResponse({ success: true, url: docUrl });
+        } catch (err) {
+            logger.error("Error in importGoogleSheet action:", err);
+            sendResponse({ success: false, error: err.message });
+        }
+    },
+    "appendHeader": async (request, sendResponse, outlineUrl, apiToken) => {
+        try {
+            const headerPosition = request.headerPosition || 'top';
+            const res = await appendHeaderToDocument(
+                outlineUrl,
+                apiToken,
+                request.docId,
+                request.headerMarkdown,
+                headerPosition
+            );
+            sendResponse({ success: true, result: res });
+        } catch (err) {
+            logger.error("Error in appendHeader action:", err);
+            sendResponse({ success: false, error: err.message });
+        }
     }
+};
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    withOutlineConfig(sendResponse, async (outlineUrl, apiToken) => {
+        if (actions.hasOwnProperty(request.action)) {
+            try {
+                await actions[request.action](request, sendResponse, outlineUrl, apiToken);
+            } catch (error) {
+                sendResponse({ success: false, error: error.message });
+            }
+        } else {
+            sendResponse({ success: false, error: "Unknown action" });
+        }
+    });
+    return true;
 });
