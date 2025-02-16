@@ -1,6 +1,6 @@
 // spreadsheet.js
 (function() {
-    // Only run on Google Sheets pages
+    // Only run on Google Sheets pages.
     if (
         !window.location.hostname.includes("docs.google.com") ||
         !window.location.pathname.includes("/spreadsheets/")
@@ -8,13 +8,12 @@
         return;
     }
 
-    // Check if the save button is enabled via options
     chrome.storage.sync.get("enableSaveButton", (result) => {
         if (result.enableSaveButton === false) {
             return;
         }
 
-        // Create and style the “Save to Outline” button
+        // Create and style the “Save to Outline” button.
         const saveButton = document.createElement("button");
         saveButton.textContent = "Save to Outline";
         Object.assign(saveButton.style, {
@@ -34,7 +33,7 @@
         document.body.appendChild(saveButton);
 
         async function handleClick() {
-            // If already saved, open the document URL in a new tab.
+            // If already saved, open the document URL.
             if (saveButton.dataset.saved === "true") {
                 const url = saveButton.dataset.url;
                 if (url) {
@@ -46,8 +45,6 @@
             saveButton.disabled = true;
             saveButton.style.transform = "scale(1.1)";
             saveButton.textContent = "Sending...";
-
-            // Remove any previously set URL.
             saveButton.dataset.url = "";
 
             // Extract the spreadsheet ID from the URL.
@@ -69,7 +66,7 @@
             const urlParams = new URLSearchParams(window.location.search);
             const gid = urlParams.get("gid") || "0";
 
-            // Build the export URL. We export as TSV.
+            // Build the export URL (TSV format).
             const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=tsv&id=${spreadsheetId}&gid=${gid}`;
 
             try {
@@ -77,10 +74,24 @@
                 if (!fetchResponse.ok) {
                     throw new Error("Failed to fetch spreadsheet. Are you signed in?");
                 }
-                // Get the TSV content as plain text.
                 const tsvContent = await fetchResponse.text();
 
-                // Send the file content to the background script.
+                // Use the dynamic title for the file name.
+                const fileName = `${document.title}.csv`;
+                // Create a File object with the dynamic file name.
+                const fileObj = new File([tsvContent], fileName, { type: "text/csv" });
+
+                // Generate a dynamic header using current document and time data.
+                const now = new Date();
+                const headerMarkdown = `| Field | Value |
+| ---- | ---- |
+| Title | ${document.title} |
+| Source | ${window.location.href} |
+| Author | (Not specified) |
+| Published | (Not specified) |
+| Created | ${now.toISOString().split('T')[0]} |`;
+
+                // Wrap chrome.runtime.sendMessage in a promise.
                 const sendMessagePromise = (msg) =>
                     new Promise((resolve, reject) => {
                         chrome.runtime.sendMessage(msg, (response) => {
@@ -91,9 +102,14 @@
                         });
                     });
 
+                // Send the TSV content along with headerMarkdown, headerPosition, and title.
+                // Passing title will allow the background script to update the document title.
                 const response = await sendMessagePromise({
                     action: "importGoogleSheet",
-                    fileContent: tsvContent
+                    fileContent: tsvContent,
+                    headerMarkdown,
+                    headerPosition: "top",
+                    title: document.title
                 });
 
                 if (response && response.success) {

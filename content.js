@@ -1,19 +1,19 @@
 // content.js
 (function() {
-    // Only run on Google Docs pages
-    if (!window.location.hostname.includes("docs.google.com") ||
-        !window.location.pathname.includes("/document/")) {
+    // Only run on Google Docs pages.
+    if (
+        !window.location.hostname.includes("docs.google.com") ||
+        !window.location.pathname.includes("/document/")
+    ) {
         return;
     }
 
-    // Check if the save button is enabled via options
     chrome.storage.sync.get("enableSaveButton", (result) => {
-        // If the setting is explicitly false, do not show the button.
         if (result.enableSaveButton === false) {
             return;
         }
 
-        // Create and style the “Save to Outline” button
+        // Create and style the “Save to Outline” button.
         const saveButton = document.createElement("button");
         saveButton.textContent = "Save to Outline";
         Object.assign(saveButton.style, {
@@ -29,12 +29,11 @@
             cursor: "pointer",
             transition: "background-color 0.5s ease, transform 0.3s ease"
         });
-        // Track saved state and URL via data attributes
         saveButton.dataset.saved = "false";
         document.body.appendChild(saveButton);
 
         async function handleClick() {
-            // If already saved, open the document URL in a new tab
+            // If already saved, open the document URL.
             if (saveButton.dataset.saved === "true") {
                 const url = saveButton.dataset.url;
                 if (url) {
@@ -43,15 +42,12 @@
                 return;
             }
 
-            // Disable the button to prevent multiple clicks
             saveButton.disabled = true;
             saveButton.style.transform = "scale(1.1)";
             saveButton.textContent = "Sending...";
-
-            // Remove any previously set data
             saveButton.dataset.url = "";
 
-            // Extract the document ID from the URL (format: /document/d/XYZ/edit)
+            // Extract the document ID from the URL.
             const match = window.location.pathname.match(/\/document\/d\/([^\/]+)/);
             if (!match) {
                 saveButton.style.backgroundColor = "red";
@@ -65,19 +61,28 @@
                 return;
             }
             const docId = match[1];
-
-            // Build the export URL using the extracted docId
+            // Build the export URL (Markdown format).
             const exportUrl = `https://docs.google.com/document/u/0/export?format=md&id=${docId}`;
 
             try {
-                // Fetch the document’s Markdown content
                 const fetchResponse = await fetch(exportUrl);
                 if (!fetchResponse.ok) {
                     throw new Error("Failed to fetch document. Are you signed in?");
                 }
                 const markdown = await fetchResponse.text();
 
-                // Wrap chrome.runtime.sendMessage in a promise
+                // Create dynamic header markdown using document and time data.
+                const now = new Date();
+                const headerMarkdown = `| Field | Value |
+| ---- | ---- |
+| Title | ${document.title} |
+| Source | ${window.location.href} |
+| Author | (Not specified) |
+| Published | (Not specified) |
+| Created | ${now.toISOString().split('T')[0]} |
+| Clipped Date | ${now.toISOString()} |`;
+
+                // Wrap chrome.runtime.sendMessage in a promise.
                 const sendMessagePromise = (msg) =>
                     new Promise((resolve, reject) => {
                         chrome.runtime.sendMessage(msg, (response) => {
@@ -88,15 +93,16 @@
                         });
                     });
 
-                // Send the title and markdown content to the background script
+                // Send the title, document content, dynamic header markdown, and specify header position ("top").
                 const response = await sendMessagePromise({
                     action: "saveGoogleDoc",
                     title: document.title,
-                    content: markdown
+                    content: markdown,
+                    headerMarkdown,      // Dynamic header.
+                    headerPosition: "top" // Prepend header at the top.
                 });
 
                 if (response && response.success) {
-                    // On success: turn button green, update text and mark as saved with URL
                     saveButton.style.backgroundColor = "green";
                     saveButton.textContent = "Saved! (Click to view)";
                     saveButton.dataset.saved = "true";
@@ -104,7 +110,6 @@
                     saveButton.disabled = false;
                     saveButton.style.transform = "scale(1)";
                 } else {
-                    // On error: animate button to red and revert after a delay
                     saveButton.style.backgroundColor = "red";
                     saveButton.textContent = "Error";
                     setTimeout(() => {
@@ -115,7 +120,6 @@
                     }, 3000);
                 }
             } catch (err) {
-                // Handle any errors during fetch or sending
                 saveButton.style.backgroundColor = "red";
                 saveButton.textContent = "Error";
                 setTimeout(() => {

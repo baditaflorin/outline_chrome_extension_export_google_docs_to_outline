@@ -1,5 +1,6 @@
 // background.js
 import OutlineAPI from './outlineAPI.js';
+import { appendHeaderToDocument } from './headerUpdateHelper.js';
 
 /**
  * Promise-based helper to get items from chrome.storage.local.
@@ -37,7 +38,6 @@ function setLocalStorage(obj) {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "saveGoogleDoc") {
-        // Existing Google Docs save logic (unchanged)
         chrome.storage.sync.get(["outlineUrl", "apiToken"], async (result) => {
             const { outlineUrl, apiToken } = result;
             if (!outlineUrl || !apiToken) {
@@ -49,32 +49,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                 // Retrieve the stored collectionId for "google-docs"
                 let { collectionId } = await getLocalStorage("collectionId");
-
-                // If not found, create a new collection named "google-docs" and save it.
                 if (!collectionId) {
                     collectionId = await api.createCollection("google-docs");
                     await setLocalStorage({ collectionId });
                 }
 
-                // Create the document on Outline using the collectionId.
+                // Create the document on Outline.
                 const res = await api.createDocument({
                     title: request.title,
                     text: request.content,
-                    collectionId,  // required for publishing
+                    collectionId,
                     publish: true
                 });
 
-                // Construct the correct Outline document URL using the returned document ID.
                 const docId = res.data && res.data.id;
                 const docUrl = docId ? `${outlineUrl}/doc/${docId}` : "";
+
+                // Optionally, update the document with the header.
+                if (docId && request.headerMarkdown) {
+                    // Use headerPosition from request if provided; default to 'top'
+                    const headerPosition = request.headerPosition || 'top';
+                    await appendHeaderToDocument(
+                        outlineUrl,
+                        apiToken,
+                        docId,
+                        request.headerMarkdown,
+                        headerPosition
+                    );
+                }
+
                 sendResponse({ success: true, url: docUrl });
             } catch (err) {
                 sendResponse({ success: false, error: err.message });
             }
         });
-        return true; // Keep the message channel open for async response.
+        return true; // Keep the channel open for async response.
     } else if (request.action === "importGoogleSheet") {
-        // New branch for Google Sheets import
         chrome.storage.sync.get(["outlineUrl", "apiToken"], async (result) => {
             const { outlineUrl, apiToken } = result;
             if (!outlineUrl || !apiToken) {
@@ -91,13 +101,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     await setLocalStorage({ collectionId_sheet });
                 }
 
-                // The request sends fileContent as plain text (exported as TSV)
+                // Create a File object from the TSV content.
                 const fileContent = request.fileContent;
-                // Create a Blob and then a File object with a .csv extension.
                 const fileBlob = new Blob([fileContent], { type: "text/csv" });
+                // Note: originally the file was named "import.csv". We now ignore that file name.
+                // The Outline document’s title will be set using the title parameter from the request.
                 const fileObj = new File([fileBlob], "import.csv", { type: "text/csv" });
 
-                // Omit parentDocumentId so the document is added at the collection root.
                 const res = await api.importDocument({
                     collectionId: collectionId_sheet,
                     file: fileObj,
@@ -106,6 +116,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                 const docId = res.data && res.data.id;
                 const docUrl = docId ? `${outlineUrl}/doc/${docId}` : "";
+
+                // NEW: Update the document's title if provided.
+                if (docId && request.title) {
+                    const docInfo = await api.getDocument(docId);
+                    const currentText = (docInfo.data && docInfo.data.text) || "";
+                    await api.updateDocument({
+                        id: docId,
+                        title: request.title, // Use the dynamic title from the request
+                        text: currentText,    // Preserve existing content
+                        append: false,
+                        publish: true,
+                        done: true
+                    });
+                }
+
+                if (docId && request.headerMarkdown) {
+                    const headerPosition = request.headerPosition || 'top';
+                    await appendHeaderToDocument(
+                        outlineUrl,
+                        apiToken,
+                        docId,
+                        request.headerMarkdown,
+                        headerPosition
+                    );
+                }
+
                 sendResponse({ success: true, url: docUrl });
             } catch (err) {
                 sendResponse({ success: false, error: err.message });
@@ -113,5 +149,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     }
-
+    else if (request.action === "appendHeader") {
+        chrome.storage.sync.get(["outlineUrl", "apiToken"], async (result) => {
+            const { outlineUrl, apiToken } = result;
+            if (!outlineUrl || !apiToken) {
+                sendResponse({ success: false, error: "Outline settings not configured. Please update options." });
+                return;
+            }
+            try {
+                const headerPosition = request.headerPosition || 'top';
+                const res = await appendHeaderToDocument(
+                    outlineUrl,
+                    apiToken,
+                    request.docId,
+                    request.headerMarkdown,
+                    headerPosition
+                );
+                sendResponse({ success: true, result: res });
+            } catch (err) {
+                sendResponse({ success: false, error: err.message });
+            }
+        });
+        return true;
+    }
 });
