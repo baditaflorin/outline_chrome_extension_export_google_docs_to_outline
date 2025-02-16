@@ -24,11 +24,19 @@
                 Show “Save to Outline” Button on Documents
             </label>
         </div>
+        <div id="connectionStatus"></div>
+        <div class="form-group">
+            <label for="googleDocsCollectionName">Google Docs Collection Name:</label>
+            <input type="text" id="googleDocsCollectionName" placeholder="google-docs">
+        </div>
+        <div class="form-group">
+            <label for="googleSheetsCollectionName">Google Sheets Collection Name:</label>
+            <input type="text" id="googleSheetsCollectionName" placeholder="google-sheets">
+        </div>
         <div class="buttons">
             <button type="submit">Save Settings</button>
             <button type="button" id="testConnection">Test Connection</button>
         </div>
-        <div id="connectionStatus"></div>
     </form>
 </div>
 <script src="options.js"></script>

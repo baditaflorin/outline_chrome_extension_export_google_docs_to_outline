@@ -3,7 +3,9 @@ document.getElementById("settings-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const outlineUrl = document.getElementById("outlineUrl").value.trim();
     const apiToken = document.getElementById("apiToken").value.trim();
-    // Get the toggle value; if checked, we store true, else false.
+    // Use default values if the inputs are left empty
+    const googleDocsCollectionName = document.getElementById("googleDocsCollectionName").value.trim() || "google-docs";
+    const googleSheetsCollectionName = document.getElementById("googleSheetsCollectionName").value.trim() || "google-sheets";
     const enableSaveButton = document.getElementById("enableSaveButton").checked;
 
     if (!outlineUrl || !apiToken) {
@@ -11,10 +13,11 @@ document.getElementById("settings-form").addEventListener("submit", (e) => {
         return;
     }
 
-    chrome.storage.sync.set({ outlineUrl, apiToken, enableSaveButton }, () => {
+    chrome.storage.sync.set({ outlineUrl, apiToken, googleDocsCollectionName, googleSheetsCollectionName, enableSaveButton }, () => {
         alert("Settings saved!");
     });
 });
+
 
 document.getElementById("testConnection").addEventListener("click", async () => {
     const outlineUrl = document.getElementById("outlineUrl").value.trim();
@@ -54,15 +57,23 @@ document.getElementById("testConnection").addEventListener("click", async () => 
 
 // Load saved settings on page load
 document.addEventListener("DOMContentLoaded", () => {
-    chrome.storage.sync.get(["outlineUrl", "apiToken", "enableSaveButton"], (result) => {
-        if (result.outlineUrl) {
-            document.getElementById("outlineUrl").value = result.outlineUrl;
+    chrome.storage.sync.get(
+        ["outlineUrl", "apiToken", "googleDocsCollectionName", "googleSheetsCollectionName", "enableSaveButton"],
+        (result) => {
+            if (result.outlineUrl) {
+                document.getElementById("outlineUrl").value = result.outlineUrl;
+            }
+            if (result.apiToken) {
+                document.getElementById("apiToken").value = result.apiToken;
+            }
+            if (result.googleDocsCollectionName) {
+                document.getElementById("googleDocsCollectionName").value = result.googleDocsCollectionName;
+            }
+            if (result.googleSheetsCollectionName) {
+                document.getElementById("googleSheetsCollectionName").value = result.googleSheetsCollectionName;
+            }
+            // Set the checkbox state (default to true if not set)
+            document.getElementById("enableSaveButton").checked = result.enableSaveButton !== false;
         }
-        if (result.apiToken) {
-            document.getElementById("apiToken").value = result.apiToken;
-        }
-        // Set the checkbox state (default to true if not set)
-        document.getElementById("enableSaveButton").checked =
-            result.enableSaveButton !== false;
-    });
+    );
 });

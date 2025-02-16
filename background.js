@@ -7,22 +7,56 @@ import { getLocalStorage, setLocalStorage, getSyncStorage } from './storage.js';
 /* --- Change 3: Cache the configuration values --- */
 let cachedConfig = null;
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'sync') {
+        if (
+            changes.outlineUrl ||
+            changes.apiToken ||
+            changes.googleDocsCollectionName ||
+            changes.googleSheetsCollectionName
+        ) {
+            cachedConfig = null;
+            // Optionally clear locally stored collection IDs so they are re-created with the new settings.
+            chrome.storage.local.remove(["collectionId", "collectionId_sheet"], () => {
+                logger.info("Cleared cached collection IDs due to config change.");
+            });
+        }
+    }
+});
+
 async function withOutlineConfig(sendResponse, callback) {
     try {
         if (!cachedConfig) {
-            const { outlineUrl, apiToken } = await getSyncStorage(["outlineUrl", "apiToken"]);
+            const { outlineUrl, apiToken, googleDocsCollectionName, googleSheetsCollectionName } = await getSyncStorage([
+                "outlineUrl",
+                "apiToken",
+                "googleDocsCollectionName",
+                "googleSheetsCollectionName"
+            ]);
             if (!outlineUrl || !apiToken) {
                 sendResponse({ success: false, error: "Outline settings not configured. Please update options." });
                 return;
             }
-            cachedConfig = { outlineUrl, apiToken };
+            cachedConfig = {
+                outlineUrl,
+                apiToken,
+                googleDocsCollectionName: googleDocsCollectionName || "google-docs",
+                googleSheetsCollectionName: googleSheetsCollectionName || "google-sheets"
+            };
         }
-        await callback(cachedConfig.outlineUrl, cachedConfig.apiToken);
+        // Pass the new config values to the callback.
+        await callback(
+            cachedConfig.outlineUrl,
+            cachedConfig.apiToken,
+            cachedConfig.googleDocsCollectionName,
+            cachedConfig.googleSheetsCollectionName
+        );
     } catch (err) {
         logger.error("withOutlineConfig error:", err);
         sendResponse({ success: false, error: err.message });
     }
 }
+
 
 /* --- Change 2: Unified error response helper --- */
 function respondWithError(sendResponse, error) {
@@ -70,10 +104,11 @@ async function getOrCreateCollection(api, storageKey, collectionName) {
  * Each handler receives (request, sendResponse, outlineUrl, apiToken).
  */
 const actions = {
-    "saveGoogleDoc": async (request, sendResponse, outlineUrl, apiToken) => {
+    "saveGoogleDoc": async (request, sendResponse, outlineUrl, apiToken, googleDocsCollectionName) => {
         try {
             const api = new OutlineAPI(outlineUrl, apiToken);
-            const collectionId = await getOrCreateCollection(api, "collectionId", "google-docs");
+            // Use the configured Google Docs collection name
+            const collectionId = await getOrCreateCollection(api, "collectionId", googleDocsCollectionName);
             logger.info(`Using collectionId: ${collectionId} for document creation.`);
 
             const res = await api.createDocument({
@@ -102,11 +137,13 @@ const actions = {
             respondWithError(sendResponse, err);
         }
     },
-    "importGoogleSheet": async (request, sendResponse, outlineUrl, apiToken) => {
+    "importGoogleSheet": async (request, sendResponse, outlineUrl, apiToken, _unused, googleSheetsCollectionName) => {
         try {
             const api = new OutlineAPI(outlineUrl, apiToken);
-            const collectionId = await getOrCreateCollection(api, "collectionId_sheet", "google-sheets");
+            // Use the configured Google Sheets collection name
+            const collectionId = await getOrCreateCollection(api, "collectionId_sheet", googleSheetsCollectionName);
             logger.info(`Using collectionId: ${collectionId} for sheet import.`);
+
 
             const fileContent = request.fileContent;
             const fileBlob = new Blob([fileContent], { type: "text/csv" });
@@ -168,10 +205,17 @@ const actions = {
 };
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    withOutlineConfig(sendResponse, async (outlineUrl, apiToken) => {
+    withOutlineConfig(sendResponse, async (outlineUrl, apiToken, googleDocsCollectionName, googleSheetsCollectionName) => {
         if (actions.hasOwnProperty(request.action)) {
             try {
-                await actions[request.action](request, sendResponse, outlineUrl, apiToken);
+                // Pass the extra parameters based on the action
+                if (request.action === "saveGoogleDoc") {
+                    await actions[request.action](request, sendResponse, outlineUrl, apiToken, googleDocsCollectionName);
+                } else if (request.action === "importGoogleSheet") {
+                    await actions[request.action](request, sendResponse, outlineUrl, apiToken, googleDocsCollectionName, googleSheetsCollectionName);
+                } else {
+                    await actions[request.action](request, sendResponse, outlineUrl, apiToken);
+                }
             } catch (error) {
                 respondWithError(sendResponse, error);
             }
