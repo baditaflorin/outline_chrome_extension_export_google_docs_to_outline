@@ -3,13 +3,15 @@ document.getElementById("settings-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const outlineUrl = document.getElementById("outlineUrl").value.trim();
     const apiToken = document.getElementById("apiToken").value.trim();
+    // Get the toggle value; if checked, we store true, else false.
+    const enableSaveButton = document.getElementById("enableSaveButton").checked;
 
     if (!outlineUrl || !apiToken) {
-        alert("Both fields are required.");
+        alert("Both API Base URL and API Token are required.");
         return;
     }
 
-    chrome.storage.sync.set({ outlineUrl, apiToken }, () => {
+    chrome.storage.sync.set({ outlineUrl, apiToken, enableSaveButton }, () => {
         alert("Settings saved!");
     });
 });
@@ -52,12 +54,15 @@ document.getElementById("testConnection").addEventListener("click", async () => 
 
 // Load saved settings on page load
 document.addEventListener("DOMContentLoaded", () => {
-    chrome.storage.sync.get(["outlineUrl", "apiToken"], (result) => {
+    chrome.storage.sync.get(["outlineUrl", "apiToken", "enableSaveButton"], (result) => {
         if (result.outlineUrl) {
             document.getElementById("outlineUrl").value = result.outlineUrl;
         }
         if (result.apiToken) {
             document.getElementById("apiToken").value = result.apiToken;
         }
+        // Set the checkbox state (default to true if not set)
+        document.getElementById("enableSaveButton").checked =
+            result.enableSaveButton !== false;
     });
 });

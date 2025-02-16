@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Google Docs to Outline",
-  "version": "1.0",
-  "description": "Save a Google Docs file (exported as Markdown) to your Outline wiki.",
+  "name": "Google Docs/Sheets to Outline",
+  "version": "1.1",
+  "description": "Save a Google Docs file (exported as Markdown) or a Google Sheet (exported as TSV renamed to CSV) to your Outline wiki.",
   "permissions": [
     "storage",
     "scripting",
@@ -10,6 +10,7 @@
   ],
   "host_permissions": [
     "https://docs.google.com/document/*",
+    "https://docs.google.com/spreadsheets/*",
     "https://*/*"
   ],
   "background": {
@@ -21,10 +22,15 @@
       "matches": ["https://docs.google.com/document/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://docs.google.com/spreadsheets/*"],
+      "js": ["spreadsheet.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "Save Google Docs to Outline",
+    "default_title": "Save Google Docs/Sheets to Outline",
     "default_popup": "options.html"
   }
 }
