@@ -1,4 +1,3 @@
-// content.js
 (function() {
     // Only run on Google Docs pages.
     if (
@@ -32,16 +31,13 @@
         saveButton.dataset.saved = "false";
         document.body.appendChild(saveButton);
 
-        async function handleClick() {
-            // If already saved, open the document URL.
-            if (saveButton.dataset.saved === "true") {
-                const url = saveButton.dataset.url;
-                if (url) {
-                    window.open(url, "_blank");
-                }
-                return;
-            }
+        let isProcessing = false;
 
+        async function handleClick() {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            // Proceed with saving logic.
             saveButton.disabled = true;
             saveButton.style.transform = "scale(1.1)";
             saveButton.textContent = "Sending...";
@@ -58,6 +54,7 @@
                     saveButton.disabled = false;
                     saveButton.style.transform = "scale(1)";
                 }, 3000);
+                isProcessing = false;
                 return;
             }
             const docId = match[1];
@@ -93,7 +90,7 @@
                         });
                     });
 
-                // Send the title, document content, dynamic header markdown, and specify header position ("top").
+                // Send the title, document content, header markdown, and header position ("top").
                 const response = await sendMessagePromise({
                     action: "saveGoogleDoc",
                     title: document.title,
@@ -128,9 +125,23 @@
                     saveButton.disabled = false;
                     saveButton.style.transform = "scale(1)";
                 }, 3000);
+            } finally {
+                isProcessing = false;
             }
         }
 
-        saveButton.addEventListener("click", handleClick);
+        // Separate the click listener:
+        // If the document is already saved, open the URL immediately.
+        // Otherwise, call the async handler.
+        saveButton.addEventListener("click", () => {
+            if (saveButton.dataset.saved === "true") {
+                const url = saveButton.dataset.url;
+                if (url) {
+                    window.open(url, "_blank");
+                }
+            } else {
+                handleClick();
+            }
+        });
     });
 })();

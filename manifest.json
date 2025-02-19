@@ -19,7 +19,8 @@
   ],
   "host_permissions": [
     "https://docs.google.com/document/*",
-    "https://docs.google.com/spreadsheets/*"
+    "https://docs.google.com/spreadsheets/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js",
