@@ -12,7 +12,7 @@
             return;
         }
 
-        // Create and style the “Save to Outline” button.
+        // Create and style the "Save to Outline" button.
         const saveButton = document.createElement("button");
         saveButton.textContent = "Save to Outline";
         Object.assign(saveButton.style, {
@@ -46,14 +46,7 @@
             // Extract the document ID from the URL.
             const match = window.location.pathname.match(/\/document\/d\/([^\/]+)/);
             if (!match) {
-                saveButton.style.backgroundColor = "red";
-                saveButton.textContent = "Invalid Document";
-                setTimeout(() => {
-                    saveButton.style.backgroundColor = "#0071e3";
-                    saveButton.textContent = "Save to Outline";
-                    saveButton.disabled = false;
-                    saveButton.style.transform = "scale(1)";
-                }, 3000);
+                displayError(saveButton, "Invalid Document");
                 isProcessing = false;
                 return;
             }
@@ -62,9 +55,23 @@
             const exportUrl = `https://docs.google.com/document/u/0/export?format=md&id=${docId}`;
 
             try {
+                // Check network connectivity first
+                if (!navigator.onLine) {
+                    throw new Error("No internet connection");
+                }
+
                 const fetchResponse = await fetch(exportUrl);
                 if (!fetchResponse.ok) {
-                    throw new Error("Failed to fetch document. Are you signed in?");
+                    const statusCode = fetchResponse.status;
+                    if (statusCode === 401 || statusCode === 403) {
+                        throw new Error("Authentication error. Please make sure you're signed in.");
+                    } else if (statusCode === 404) {
+                        throw new Error("Document not found.");
+                    } else if (statusCode >= 500) {
+                        throw new Error("Google Docs server error. Please try again later.");
+                    } else {
+                        throw new Error(`Failed to fetch document (Status: ${statusCode})`);
+                    }
                 }
                 const markdown = await fetchResponse.text();
 
@@ -90,44 +97,70 @@
                         });
                     });
 
-                // Send the title, document content, header markdown, and header position ("top").
-                const response = await sendMessagePromise({
-                    action: "saveGoogleDoc",
-                    title: document.title,
-                    content: markdown,
-                    headerMarkdown,      // Dynamic header.
-                    headerPosition: "top" // Prepend header at the top.
-                });
+                try {
+                    // Send the title, document content, header markdown, and header position ("top").
+                    const response = await sendMessagePromise({
+                        action: "saveGoogleDoc",
+                        title: document.title,
+                        content: markdown,
+                        headerMarkdown,      // Dynamic header.
+                        headerPosition: "top" // Prepend header at the top.
+                    });
 
-                if (response && response.success) {
-                    saveButton.style.backgroundColor = "green";
-                    saveButton.textContent = "Saved! (Click to view)";
-                    saveButton.dataset.saved = "true";
-                    saveButton.dataset.url = response.url || "";
-                    saveButton.disabled = false;
-                    saveButton.style.transform = "scale(1)";
-                } else {
-                    saveButton.style.backgroundColor = "red";
-                    saveButton.textContent = "Error";
-                    setTimeout(() => {
-                        saveButton.style.backgroundColor = "#0071e3";
-                        saveButton.textContent = "Save to Outline";
+                    if (response && response.success) {
+                        saveButton.style.backgroundColor = "green";
+                        saveButton.textContent = "Saved! (Click to view)";
+                        saveButton.dataset.saved = "true";
+                        saveButton.dataset.url = response.url || "";
                         saveButton.disabled = false;
                         saveButton.style.transform = "scale(1)";
-                    }, 3000);
+                    } else {
+                        const errorMessage = response && response.error ? response.error : "Unknown error";
+                        throw new Error(errorMessage);
+                    }
+                } catch (messageError) {
+                    if (messageError.message.includes("Extension context invalidated")) {
+                        throw new Error("Extension reloaded. Please refresh the page and try again.");
+                    } else if (messageError.message.includes("Could not establish connection")) {
+                        throw new Error("Connection to extension failed. Please refresh the page.");
+                    } else {
+                        throw messageError;
+                    }
                 }
             } catch (err) {
-                saveButton.style.backgroundColor = "red";
-                saveButton.textContent = "Error";
-                setTimeout(() => {
-                    saveButton.style.backgroundColor = "#0071e3";
-                    saveButton.textContent = "Save to Outline";
-                    saveButton.disabled = false;
-                    saveButton.style.transform = "scale(1)";
-                }, 3000);
+                console.error("Export/save error:", err);
+                let errorMessage = "Error";
+
+                // Determine appropriate error message based on error type
+                if (!navigator.onLine) {
+                    errorMessage = "Offline";
+                } else if (err.message.includes("Authentication")) {
+                    errorMessage = "Auth Error";
+                } else if (err.message.includes("Extension") || err.message.includes("Connection")) {
+                    errorMessage = "Ext Error";
+                } else if (err.message.includes("server error")) {
+                    errorMessage = "Server Error";
+                } else if (err.name === 'TypeError' && err.message.includes('network')) {
+                    errorMessage = "Network Error";
+                } else if (err.name === 'AbortError') {
+                    errorMessage = "Cancelled";
+                }
+
+                displayError(saveButton, errorMessage);
             } finally {
                 isProcessing = false;
             }
+        }
+
+        function displayError(button, message) {
+            button.style.backgroundColor = "red";
+            button.textContent = message;
+            setTimeout(() => {
+                button.style.backgroundColor = "#0071e3";
+                button.textContent = "Save to Outline";
+                button.disabled = false;
+                button.style.transform = "scale(1)";
+            }, 3000);
         }
 
         // Separate the click listener:

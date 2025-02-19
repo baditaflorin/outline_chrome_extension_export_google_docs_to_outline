@@ -26,12 +26,16 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
   "content_scripts": [
     {
       "matches": ["https://docs.google.com/document/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     },
+
     {
       "matches": ["https://docs.google.com/spreadsheets/*"],
       "js": ["spreadsheet.js"],

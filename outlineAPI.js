@@ -43,32 +43,95 @@ class OutlineAPI {
         console.debug(`[REQUEST] ${fetchOptions.method || "GET"} ${endpoint}`, { headers, body: restOptions.body });
 
         let attempts = 0;
-        while (true) {
+        const maxAttempts = retry + 1; // Original attempt plus retries
+
+        while (attempts < maxAttempts) {
             try {
+                attempts++;
                 const response = await fetch(endpoint, fetchOptions);
+
+                // Check for HTTP errors
                 if (!response.ok) {
                     const errorText = await response.text();
-                    console.error(`[ERROR] Request failed. Status: ${response.status}, Error: ${errorText}`);
+                    const statusCode = response.status;
+                    console.error(`[ERROR] Request failed. Status: ${statusCode}, Error: ${errorText}`);
+
+                    // Don't retry client errors (4xx), only server errors (5xx)
+                    if (statusCode >= 400 && statusCode < 500) {
+                        if (statusCode === 401 || statusCode === 403) {
+                            throw new Error(`Authentication error (${statusCode}): ${errorText}`);
+                        } else if (statusCode === 404) {
+                            throw new Error(`Resource not found (404): ${errorText}`);
+                        } else if (statusCode === 429) {
+                            // Rate limiting - special case that should retry with backoff
+                            if (attempts < maxAttempts) {
+                                // Exponential backoff for rate limiting
+                                const backoffDelay = retryDelay * Math.pow(2, attempts - 1);
+                                console.warn(`[WARNING] Rate limited. Retrying in ${backoffDelay}ms...`);
+                                await new Promise(resolve => setTimeout(resolve, backoffDelay));
+                                continue;
+                            }
+                        }
+                        throw new Error(`API error (${statusCode}): ${errorText}`);
+                    }
+
+                    // For server errors, retry if we have attempts left
+                    if (attempts < maxAttempts) {
+                        console.warn(`[WARNING] Server error (${statusCode}). Retry ${attempts}/${retry}...`);
+                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        continue;
+                    }
+
                     throw new Error(`Outline API error: ${response.status} - ${errorText}`);
                 }
-                const json = await response.json();
-                console.debug(`[RESPONSE]`, json);
-                return json;
+
+                // Success response - parse JSON
+                try {
+                    const json = await response.json();
+                    console.debug(`[RESPONSE]`, json);
+                    return json;
+                } catch (jsonError) {
+                    console.error(`[ERROR] Failed to parse JSON response:`, jsonError);
+                    throw new Error(`Invalid JSON response: ${jsonError.message}`);
+                }
             } catch (error) {
-                // **Change 3:** If we have retries left, wait and then retry.
-                if (attempts < retry) {
-                    attempts++;
+                // Handle AbortError specifically
+                if (error.name === 'AbortError') {
+                    console.info('[INFO] Request was cancelled by user');
+                    throw new Error('Request cancelled');
+                }
+
+                // Handle network errors (offline, connection refused, etc.)
+                if (error.name === 'TypeError' && error.message.includes('network')) {
+                    if (attempts < maxAttempts) {
+                        console.warn(`[WARNING] Network error: ${error.message}. Retrying in ${retryDelay}ms...`);
+                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        continue;
+                    }
+                    throw new Error(`Network error: ${error.message}. Please check your internet connection.`);
+                }
+
+                // For other errors, retry if we have attempts left
+                if (attempts < maxAttempts && !error.message.includes('Authentication error') &&
+                    !error.message.includes('Resource not found')) {
                     console.warn(
-                        `[WARNING] Request failed (attempt ${attempts}): ${error.message}. Retrying in ${retryDelay}ms...`
+                        `[WARNING] Request failed (attempt ${attempts}/${maxAttempts}): ${error.message}. Retrying in ${retryDelay}ms...`
                     );
-                    await new Promise((res) => setTimeout(res, retryDelay));
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
                     continue;
                 }
+
+                // No more retries or non-retryable error
                 throw error;
             }
         }
     }
 
+    /**
+     * Creates a new collection
+     * @param {string} collectionName - The name for the new collection
+     * @returns {Promise<string>} The ID of the created collection
+     */
     async createCollection(collectionName) {
         const endpoint = `${this.baseUrl}/api/collections.create`;
         console.log(`Creating collection with name: "${collectionName}" at endpoint: ${endpoint}`);
@@ -80,15 +143,25 @@ class OutlineAPI {
             private: false
         };
 
-        const result = await this._request(endpoint, {
-            method: "POST",
-            body: JSON.stringify(payload)
-            // You could pass retry: 2 here if desired.
-        });
-        console.log(`Collection created successfully: ${JSON.stringify(result)}`);
-        return result.data.id;
+        try {
+            const result = await this._request(endpoint, {
+                method: "POST",
+                body: JSON.stringify(payload),
+                retry: 2
+            });
+            console.log(`Collection created successfully: ${JSON.stringify(result)}`);
+            return result.data.id;
+        } catch (error) {
+            console.error(`Failed to create collection: ${error.message}`);
+            throw new Error(`Failed to create collection: ${error.message}`);
+        }
     }
 
+    /**
+     * Creates a new document in the specified collection
+     * @param {Object} params - Document creation parameters
+     * @returns {Promise<Object>} Creation result with document data
+     */
     async createDocument({ title, text, collectionId, publish = true, parentDocumentId = null }) {
         const endpoint = `${this.baseUrl}/api/documents.create`;
         const payload = { title, text, collectionId, publish };
@@ -96,14 +169,26 @@ class OutlineAPI {
             payload.parentDocumentId = parentDocumentId;
         }
         console.log(`Creating document with payload: ${JSON.stringify(payload)}`);
-        const result = await this._request(endpoint, {
-            method: "POST",
-            body: JSON.stringify(payload)
-        });
-        console.log(`Document created successfully: ${JSON.stringify(result)}`);
-        return result;
+
+        try {
+            const result = await this._request(endpoint, {
+                method: "POST",
+                body: JSON.stringify(payload),
+                retry: 1
+            });
+            console.log(`Document created successfully: ${JSON.stringify(result)}`);
+            return result;
+        } catch (error) {
+            console.error(`Failed to create document: ${error.message}`);
+            throw new Error(`Failed to create document: ${error.message}`);
+        }
     }
 
+    /**
+     * Imports a document from a file
+     * @param {Object} params - Import parameters including file and collection
+     * @returns {Promise<Object>} Import result with document data
+     */
     async importDocument({ collectionId, file, parentDocumentId = "", template = false, publish = true }) {
         const endpoint = `${this.baseUrl}/api/documents.import`;
         const formData = new FormData();
@@ -116,55 +201,103 @@ class OutlineAPI {
         formData.append("publish", publish.toString());
 
         console.log(`Importing document with collectionId: ${collectionId}`);
-        const result = await this._request(endpoint, {
-            method: "POST",
-            body: formData // Do not set Content-Type header for FormData.
-        });
-        console.log(`Document imported successfully: ${JSON.stringify(result)}`);
-        return result;
+        try {
+            const result = await this._request(endpoint, {
+                method: "POST",
+                body: formData, // Do not set Content-Type header for FormData.
+                retry: 1
+            });
+            console.log(`Document imported successfully: ${JSON.stringify(result)}`);
+            return result;
+        } catch (error) {
+            console.error(`Failed to import document: ${error.message}`);
+            throw new Error(`Failed to import document: ${error.message}`);
+        }
     }
 
+    /**
+     * Updates an existing document
+     * @param {Object} params - Update parameters
+     * @returns {Promise<Object>} Update result
+     */
     async updateDocument({ id, title = "", text, append = false, publish = true, done = false }) {
         const endpoint = `${this.baseUrl}/api/documents.update`;
         const payload = { id, title, text, append, publish, done };
         console.log(`Updating document ${id} with payload: ${JSON.stringify(payload)}`);
-        const result = await this._request(endpoint, {
-            method: "POST",
-            body: JSON.stringify(payload)
-        });
-        console.log(`Document ${id} updated successfully: ${JSON.stringify(result)}`);
-        return result;
+
+        try {
+            const result = await this._request(endpoint, {
+                method: "POST",
+                body: JSON.stringify(payload),
+                retry: 1
+            });
+            console.log(`Document ${id} updated successfully: ${JSON.stringify(result)}`);
+            return result;
+        } catch (error) {
+            console.error(`Failed to update document ${id}: ${error.message}`);
+            throw new Error(`Failed to update document: ${error.message}`);
+        }
     }
 
+    /**
+     * Gets document information
+     * @param {string} id - Document ID
+     * @returns {Promise<Object>} Document data
+     */
     async getDocument(id) {
         const endpoint = `${this.baseUrl}/api/documents.info`;
         console.log(`Fetching document info for id: ${id}`);
-        const result = await this._request(endpoint, {
-            method: "POST",
-            body: JSON.stringify({ id })
-        });
-        console.log(`Fetched document info: ${JSON.stringify(result)}`);
-        return result;
+
+        try {
+            const result = await this._request(endpoint, {
+                method: "POST",
+                body: JSON.stringify({ id }),
+                retry: 1
+            });
+            console.log(`Fetched document info: ${JSON.stringify(result)}`);
+            return result;
+        } catch (error) {
+            console.error(`Failed to get document ${id}: ${error.message}`);
+            throw new Error(`Failed to get document: ${error.message}`);
+        }
     }
 
+    /**
+     * Gets collection information and validates it's active
+     * @param {string} collectionId - Collection ID
+     * @returns {Promise<Object>} Collection data
+     */
     async getCollection(collectionId) {
         console.log(`Fetching collection info for id: ${collectionId}`);
         const endpoint = `${this.baseUrl}/api/collections.info`;
-        const result = await this._request(endpoint, {
-            method: "POST",
-            body: JSON.stringify({ id: collectionId })
-        });
-        console.log(`Fetched collection info: ${JSON.stringify(result)}`);
 
-        if (result.data && result.data.deletedAt) {
-            console.error(`Collection ${collectionId} is marked as deleted.`);
-            throw new Error(`Collection ${collectionId} is deleted.`);
+        try {
+            const result = await this._request(endpoint, {
+                method: "POST",
+                body: JSON.stringify({ id: collectionId }),
+                retry: 1
+            });
+            console.log(`Fetched collection info: ${JSON.stringify(result)}`);
+
+            if (!result.data) {
+                throw new Error(`Invalid collection response for ${collectionId}`);
+            }
+
+            if (result.data.deletedAt) {
+                console.error(`Collection ${collectionId} is marked as deleted.`);
+                throw new Error(`Collection ${collectionId} is deleted.`);
+            }
+
+            if (result.data.archivedAt) {
+                console.error(`Collection ${collectionId} is archived.`);
+                throw new Error(`Collection ${collectionId} is archived.`);
+            }
+
+            return result;
+        } catch (error) {
+            console.error(`Failed to get collection ${collectionId}: ${error.message}`);
+            throw new Error(`Failed to get collection: ${error.message}`);
         }
-        if (result.data && result.data.archivedAt) {
-            console.error(`Collection ${collectionId} is archived.`);
-            throw new Error(`Collection ${collectionId} is archived.`);
-        }
-        return result;
     }
 }
 
