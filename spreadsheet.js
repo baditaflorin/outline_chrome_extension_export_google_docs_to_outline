@@ -13,7 +13,7 @@
             return;
         }
 
-        // Create and style the “Save to Outline” button.
+        // Create and style the "Save to Outline" button.
         const saveButton = document.createElement("button");
         saveButton.textContent = "Save to Outline";
         Object.assign(saveButton.style, {
@@ -32,13 +32,20 @@
         saveButton.dataset.saved = "false";
         document.body.appendChild(saveButton);
 
+        let isProcessing = false;
+
         async function handleClick() {
+            // Prevent concurrent operations
+            if (isProcessing) return;
+            isProcessing = true;
+
             // If already saved, open the document URL.
             if (saveButton.dataset.saved === "true") {
                 const url = saveButton.dataset.url;
                 if (url) {
                     window.open(url, "_blank");
                 }
+                isProcessing = false;
                 return;
             }
 
@@ -50,14 +57,8 @@
             // Extract the spreadsheet ID from the URL.
             const match = window.location.pathname.match(/\/spreadsheets\/d\/([^\/]+)/);
             if (!match) {
-                saveButton.style.backgroundColor = "red";
-                saveButton.textContent = "Invalid Spreadsheet";
-                setTimeout(() => {
-                    saveButton.style.backgroundColor = "#0071e3";
-                    saveButton.textContent = "Save to Outline";
-                    saveButton.disabled = false;
-                    saveButton.style.transform = "scale(1)";
-                }, 3000);
+                displayError(saveButton, "Invalid Spreadsheet");
+                isProcessing = false;
                 return;
             }
             const spreadsheetId = match[1];
@@ -70,11 +71,35 @@
             const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=tsv&id=${spreadsheetId}&gid=${gid}`;
 
             try {
+                // Check network connectivity first
+                if (!navigator.onLine) {
+                    throw new Error("No internet connection");
+                }
+
                 const fetchResponse = await fetch(exportUrl);
                 if (!fetchResponse.ok) {
-                    throw new Error("Failed to fetch spreadsheet. Are you signed in?");
+                    const statusCode = fetchResponse.status;
+                    if (statusCode === 401 || statusCode === 403) {
+                        throw new Error("Authentication error. Please make sure you're signed in.");
+                    } else if (statusCode === 404) {
+                        throw new Error("Spreadsheet not found.");
+                    } else if (statusCode >= 500) {
+                        throw new Error("Google Sheets server error. Please try again later.");
+                    } else {
+                        throw new Error(`Failed to fetch spreadsheet (Status: ${statusCode})`);
+                    }
                 }
+
+                // Check content type to ensure we got the expected format
+                const contentType = fetchResponse.headers.get('content-type');
+                if (contentType && !contentType.includes('text/') && !contentType.includes('csv')) {
+                    throw new Error("Received unexpected file format");
+                }
+
                 const tsvContent = await fetchResponse.text();
+                if (!tsvContent || tsvContent.trim() === '') {
+                    throw new Error("Received empty spreadsheet data");
+                }
 
                 // Use the dynamic title for the file name.
                 const fileName = `${document.title}.csv`;
@@ -103,43 +128,75 @@
                         });
                     });
 
-                // Send the TSV content along with headerMarkdown, headerPosition, and title.
-                // Passing title will allow the background script to update the document title.
-                const response = await sendMessagePromise({
-                    action: "importGoogleSheet",
-                    fileContent: tsvContent,
-                    headerMarkdown,
-                    headerPosition: "top",
-                    title: document.title
-                });
+                try {
+                    // Send the TSV content along with headerMarkdown, headerPosition, and title.
+                    // Passing title will allow the background script to update the document title.
+                    const response = await sendMessagePromise({
+                        action: "importGoogleSheet",
+                        fileContent: tsvContent,
+                        headerMarkdown,
+                        headerPosition: "top",
+                        title: document.title
+                    });
 
-                if (response && response.success) {
-                    saveButton.style.backgroundColor = "green";
-                    saveButton.textContent = "Saved! (Click to view)";
-                    saveButton.dataset.saved = "true";
-                    saveButton.dataset.url = response.url || "";
-                    saveButton.disabled = false;
-                    saveButton.style.transform = "scale(1)";
-                } else {
-                    saveButton.style.backgroundColor = "red";
-                    saveButton.textContent = "Error";
-                    setTimeout(() => {
-                        saveButton.style.backgroundColor = "#0071e3";
-                        saveButton.textContent = "Save to Outline";
+                    if (response && response.success) {
+                        saveButton.style.backgroundColor = "green";
+                        saveButton.textContent = "Saved! (Click to view)";
+                        saveButton.dataset.saved = "true";
+                        saveButton.dataset.url = response.url || "";
                         saveButton.disabled = false;
                         saveButton.style.transform = "scale(1)";
-                    }, 3000);
+                    } else {
+                        const errorMessage = response && response.error ? response.error : "Unknown error";
+                        throw new Error(errorMessage);
+                    }
+                } catch (messageError) {
+                    if (messageError.message.includes("Extension context invalidated")) {
+                        throw new Error("Extension reloaded. Please refresh the page and try again.");
+                    } else if (messageError.message.includes("Could not establish connection")) {
+                        throw new Error("Connection to extension failed. Please refresh the page.");
+                    } else {
+                        throw messageError;
+                    }
                 }
             } catch (err) {
-                saveButton.style.backgroundColor = "red";
-                saveButton.textContent = "Error";
-                setTimeout(() => {
-                    saveButton.style.backgroundColor = "#0071e3";
-                    saveButton.textContent = "Save to Outline";
-                    saveButton.disabled = false;
-                    saveButton.style.transform = "scale(1)";
-                }, 3000);
+                console.error("Export/save error:", err);
+                let errorMessage = "Error";
+
+                // Determine appropriate error message based on error type
+                if (!navigator.onLine) {
+                    errorMessage = "Offline";
+                } else if (err.message.includes("Authentication")) {
+                    errorMessage = "Auth Error";
+                } else if (err.message.includes("Extension") || err.message.includes("Connection")) {
+                    errorMessage = "Ext Error";
+                } else if (err.message.includes("server error")) {
+                    errorMessage = "Server Error";
+                } else if (err.message.includes("empty spreadsheet")) {
+                    errorMessage = "Empty Data";
+                } else if (err.message.includes("unexpected file format")) {
+                    errorMessage = "Format Error";
+                } else if (err.name === 'TypeError' && err.message.includes('network')) {
+                    errorMessage = "Network Error";
+                } else if (err.name === 'AbortError') {
+                    errorMessage = "Cancelled";
+                }
+
+                displayError(saveButton, errorMessage);
+            } finally {
+                isProcessing = false;
             }
+        }
+
+        function displayError(button, message) {
+            button.style.backgroundColor = "red";
+            button.textContent = message;
+            setTimeout(() => {
+                button.style.backgroundColor = "#0071e3";
+                button.textContent = "Save to Outline";
+                button.disabled = false;
+                button.style.transform = "scale(1)";
+            }, 3000);
         }
 
         saveButton.addEventListener("click", handleClick);
