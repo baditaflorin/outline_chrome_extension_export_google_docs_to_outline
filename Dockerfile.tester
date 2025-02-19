@@ -1,0 +1,31 @@
+FROM node:18-slim
+
+WORKDIR /app
+
+# Install Chrome dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    ca-certificates \
+    zip \
+    unzip \
+    jq \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install test dependencies
+COPY package*.json ./
+RUN npm install \
+    jest \
+    puppeteer \
+    selenium-webdriver \
+    mocha \
+    chai \
+    chromedriver \
+    --save-dev
+
+# Create test results directory
+RUN mkdir -p /app/test-results
+
+CMD ["npm", "test"]

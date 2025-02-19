@@ -1,0 +1,38 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install required system dependencies
+RUN apk add --no-cache \
+    bash \
+    git \
+    zip \
+    jq \
+    curl \
+    python3 \
+    make \
+    g++ \
+    openssl
+
+# Install Chrome Web Store CLI and other useful tools
+RUN npm install -g \
+    chrome-webstore-cli \
+    web-ext \
+    addons-linter \
+    eslint \
+    prettier
+
+# Create directory for Chrome Web Store credentials
+RUN mkdir -p /root/.chrome-webstore-keys
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Add helper scripts
+COPY scripts/extension-cli.sh /usr/local/bin/extension
+RUN chmod +x /usr/local/bin/extension
+
+CMD ["/bin/bash"]

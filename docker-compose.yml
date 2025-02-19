@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  chrome-extension-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile.extension
+    container_name: chrome-extension-cli
+    volumes:
+      - ./:/app
+      - extension-node-modules:/app/node_modules
+      - ~/.chrome-webstore-keys:/root/.chrome-webstore-keys:ro
+    environment:
+      - NODE_ENV=development
+      - CWS_CLIENT_ID=${CWS_CLIENT_ID}
+      - CWS_CLIENT_SECRET=${CWS_CLIENT_SECRET}
+      - CWS_REFRESH_TOKEN=${CWS_REFRESH_TOKEN}
+      - EXTENSION_ID=${EXTENSION_ID}
+    command: /bin/sh -c "while true; do sleep 1; done"
+
+  chrome-browser:
+    image: selenium/standalone-chrome:latest
+    container_name: chrome-browser
+    shm_size: 2gb
+    ports:
+      - "4444:4444"
+      - "7900:7900" # VNC viewer
+    environment:
+      - SE_NODE_MAX_SESSIONS=5
+      - SE_NODE_OVERRIDE_MAX_SESSIONS=true
+    volumes:
+      - ./:/app:ro
+    depends_on:
+      - chrome-extension-cli
+
+  extension-tester:
+    build:
+      context: .
+      dockerfile: Dockerfile.tester
+    container_name: extension-tester
+    volumes:
+      - ./:/app
+      - extension-test-node-modules:/app/node_modules
+      - ./test-results:/app/test-results
+    environment:
+      - SELENIUM_REMOTE_URL=http://chrome-browser:4444
+      - EXTENSION_PATH=/app
+    depends_on:
+      - chrome-browser
+
+volumes:
+  extension-node-modules:
+  extension-test-node-modules:
