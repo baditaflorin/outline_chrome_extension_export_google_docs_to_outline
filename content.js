@@ -1,3 +1,4 @@
+// content.js
 (function() {
     // Only run on Google Docs pages.
     if (
@@ -32,6 +33,7 @@
         document.body.appendChild(saveButton);
 
         let isProcessing = false;
+        let timeoutId = null;
 
         async function handleClick() {
             if (isProcessing) return;
@@ -43,11 +45,21 @@
             saveButton.textContent = "Sending...";
             saveButton.dataset.url = "";
 
+            // Set a global timeout to prevent hanging requests
+            timeoutId = setTimeout(() => {
+                if (isProcessing) {
+                    displayError(saveButton, "Timeout");
+                    isProcessing = false;
+                    if (timeoutId) clearTimeout(timeoutId);
+                }
+            }, 60000); // 60-second timeout
+
             // Extract the document ID from the URL.
             const match = window.location.pathname.match(/\/document\/d\/([^\/]+)/);
             if (!match) {
                 displayError(saveButton, "Invalid Document");
                 isProcessing = false;
+                if (timeoutId) clearTimeout(timeoutId);
                 return;
             }
             const docId = match[1];
@@ -60,7 +72,16 @@
                     throw new Error("No internet connection");
                 }
 
-                const fetchResponse = await fetch(exportUrl);
+                // Use AbortController for fetch timeout
+                const controller = new AbortController();
+                const fetchTimeout = setTimeout(() => controller.abort(), 30000); // 30-second fetch timeout
+
+                const fetchResponse = await fetch(exportUrl, {
+                    signal: controller.signal
+                }).finally(() => {
+                    clearTimeout(fetchTimeout);
+                });
+
                 if (!fetchResponse.ok) {
                     const statusCode = fetchResponse.status;
                     if (statusCode === 401 || statusCode === 403) {
@@ -73,7 +94,16 @@
                         throw new Error(`Failed to fetch document (Status: ${statusCode})`);
                     }
                 }
+
+                const contentType = fetchResponse.headers.get('content-type');
+                if (contentType && !contentType.includes('text/')) {
+                    throw new Error("Received unexpected file format");
+                }
+
                 const markdown = await fetchResponse.text();
+                if (!markdown || markdown.trim() === '') {
+                    throw new Error("Received empty document data");
+                }
 
                 // Create dynamic header markdown using document and time data.
                 const now = new Date();
@@ -89,7 +119,12 @@
                 // Wrap chrome.runtime.sendMessage in a promise.
                 const sendMessagePromise = (msg) =>
                     new Promise((resolve, reject) => {
+                        const messageTimeout = setTimeout(() => {
+                            reject(new Error("Message timeout"));
+                        }, 30000); // 30-second message timeout
+
                         chrome.runtime.sendMessage(msg, (response) => {
+                            clearTimeout(messageTimeout);
                             if (chrome.runtime.lastError) {
                                 return reject(chrome.runtime.lastError);
                             }
@@ -123,6 +158,8 @@
                         throw new Error("Extension reloaded. Please refresh the page and try again.");
                     } else if (messageError.message.includes("Could not establish connection")) {
                         throw new Error("Connection to extension failed. Please refresh the page.");
+                    } else if (messageError.message.includes("Message timeout")) {
+                        throw new Error("Operation timed out. Please try again.");
                     } else {
                         throw messageError;
                     }
@@ -140,21 +177,29 @@
                     errorMessage = "Ext Error";
                 } else if (err.message.includes("server error")) {
                     errorMessage = "Server Error";
+                } else if (err.message.includes("empty document")) {
+                    errorMessage = "Empty Data";
+                } else if (err.message.includes("unexpected file format")) {
+                    errorMessage = "Format Error";
                 } else if (err.name === 'TypeError' && err.message.includes('network')) {
                     errorMessage = "Network Error";
-                } else if (err.name === 'AbortError') {
-                    errorMessage = "Cancelled";
+                } else if (err.name === 'AbortError' || err.message.includes('timed out')) {
+                    errorMessage = "Timeout";
+                } else {
+                    errorMessage = "Error: " + (err.message?.slice(0, 15) || "Unknown");
                 }
 
                 displayError(saveButton, errorMessage);
             } finally {
                 isProcessing = false;
+                if (timeoutId) clearTimeout(timeoutId);
             }
         }
 
         function displayError(button, message) {
             button.style.backgroundColor = "red";
             button.textContent = message;
+            console.error(`Error during export: ${message}`);
             setTimeout(() => {
                 button.style.backgroundColor = "#0071e3";
                 button.textContent = "Save to Outline";
