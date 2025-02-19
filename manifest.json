@@ -8,8 +8,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-
-"permissions": [
+  "permissions": [
     "storage",
     "scripting",
     "notifications"
@@ -35,11 +34,16 @@
       "js": ["content.js"],
       "run_at": "document_idle"
     },
-
     {
       "matches": ["https://docs.google.com/spreadsheets/*"],
       "js": ["spreadsheet.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["https://docs.google.com/*"]
     }
   ],
   "action": {

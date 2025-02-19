@@ -7,6 +7,7 @@ import { getLocalStorage, setLocalStorage, getSyncStorage } from './storage.js';
 /* --- Change 3: Cache the configuration values --- */
 let cachedConfig = null;
 const REQUEST_TIMEOUT = 30000; // 30 seconds timeout for all requests
+const MAX_RETRIES = 3; // Maximum number of retries for operations
 
 // Clear cache when settings change
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -54,6 +55,34 @@ function clearControllerTimeout(controller) {
 }
 
 /**
+ * Validates URL format
+ * @param {string} url - URL to validate
+ * @returns {boolean} Whether the URL is valid
+ */
+function isValidUrl(url) {
+    if (!url) return false;
+
+    try {
+        const urlObj = new URL(url);
+        return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+    } catch (err) {
+        return false;
+    }
+}
+
+/**
+ * Validates API token format
+ * @param {string} token - API token to validate
+ * @returns {boolean} Whether the token format is valid
+ */
+function isValidApiToken(token) {
+    if (!token) return false;
+    // Basic validation - non-empty string with minimum length
+    // Adjust this pattern based on Outline API token format requirements
+    return typeof token === 'string' && token.trim().length >= 10;
+}
+
+/**
  * Helper function to load and validate Outline config
  * @param {Function} sendResponse - Function to send response back to caller
  * @param {Function} callback - Callback to execute with config values
@@ -68,25 +97,35 @@ async function withOutlineConfig(sendResponse, callback) {
                 "googleSheetsCollectionName"
             ]);
 
+            // Enhanced validation
             if (!outlineUrl || !apiToken) {
                 respondWithError(sendResponse, new Error("Outline settings not configured. Please update options."));
                 return;
             }
 
             // Validate URL format
-            try {
-                new URL(outlineUrl);
-            } catch (err) {
+            if (!isValidUrl(outlineUrl)) {
                 respondWithError(sendResponse, new Error("Invalid Outline URL format. Please check your settings."));
                 return;
             }
 
+            // Validate API token format
+            if (!isValidApiToken(apiToken)) {
+                respondWithError(sendResponse, new Error("Invalid API token format. Please check your settings."));
+                return;
+            }
+
+            // Normalize and store config
+            const normalizedUrl = outlineUrl.trim().replace(/\/$/, ''); // Remove trailing slash
+
             cachedConfig = {
-                outlineUrl: outlineUrl.trim(),
+                outlineUrl: normalizedUrl,
                 apiToken: apiToken.trim(),
                 googleDocsCollectionName: googleDocsCollectionName?.trim() || "google-docs",
                 googleSheetsCollectionName: googleSheetsCollectionName?.trim() || "google-sheets"
             };
+
+            logger.info(`Configuration loaded and validated successfully: ${normalizedUrl}`);
         }
 
         // Pass the config values to the callback.
@@ -127,48 +166,168 @@ async function getOrCreateCollection(api, storageKey, collectionName) {
     const stored = await getLocalStorage(storageKey);
     let collectionId = stored[storageKey];
     let isVerified = false;
+    let retryCount = 0;
+    const maxRetries = MAX_RETRIES;
 
     if (collectionId) {
         logger.info(`Found stored collection id: ${collectionId}. Verifying its existence...`);
-        try {
-            const controller = createControllerWithTimeout();
+
+        while (retryCount <= maxRetries && !isVerified) {
             try {
-                const collectionInfo = await api.getCollection(collectionId);
-                clearControllerTimeout(controller);
-                logger.info(`Collection verified: ${JSON.stringify(collectionInfo)}`);
-                isVerified = true;
+                const controller = createControllerWithTimeout();
+                try {
+                    const collectionInfo = await api.getCollection(collectionId);
+                    clearControllerTimeout(controller);
+                    logger.info(`Collection verified: ${JSON.stringify(collectionInfo)}`);
+                    isVerified = true;
+                } catch (err) {
+                    clearControllerTimeout(controller);
+                    throw err;
+                }
             } catch (err) {
-                clearControllerTimeout(controller);
-                throw err;
+                logger.error(`Verification attempt ${retryCount + 1}/${maxRetries + 1} failed for collection ${collectionId}: ${err.message}`);
+
+                // Don't retry certain errors
+                if (err.message.includes('not found') ||
+                    err.message.includes('deleted') ||
+                    err.message.includes('archived') ||
+                    err.message.includes('Authentication error')) {
+                    // These errors indicate the collection doesn't exist or isn't accessible
+                    // Stop retrying and create a new collection
+                    isVerified = false;
+                    break;
+                }
+
+                retryCount++;
+
+                if (retryCount <= maxRetries) {
+                    // Exponential backoff with jitter
+                    const delay = Math.min(1000 * Math.pow(2, retryCount - 1) + Math.random() * 1000, 10000);
+                    logger.info(`Waiting ${delay}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                } else {
+                    // Fall through to creation after all retries exhausted
+                    isVerified = false;
+                }
             }
-        } catch (err) {
-            logger.error(`Verification failed for collection ${collectionId}: ${err.message}`);
-            // Fall through to creation
-            isVerified = false;
         }
     }
 
     // Create a new collection if needed
     if (!isVerified) {
-        try {
-            logger.info(`Creating new collection "${collectionName}"...`);
-            const controller = createControllerWithTimeout();
+        retryCount = 0;
+
+        while (retryCount <= maxRetries) {
             try {
-                collectionId = await api.createCollection(collectionName);
-                clearControllerTimeout(controller);
-                logger.info(`New collection created: ${collectionId}. Saving to local storage.`);
-                await setLocalStorage({ [storageKey]: collectionId });
-            } catch (err) {
-                clearControllerTimeout(controller);
-                throw err;
+                logger.info(`Creating new collection "${collectionName}"...`);
+                const controller = createControllerWithTimeout();
+                try {
+                    collectionId = await api.createCollection(collectionName);
+                    clearControllerTimeout(controller);
+                    logger.info(`New collection created: ${collectionId}. Saving to local storage.`);
+                    await setLocalStorage({ [storageKey]: collectionId });
+                    return collectionId;
+                } catch (err) {
+                    clearControllerTimeout(controller);
+                    throw err;
+                }
+            } catch (createErr) {
+                logger.error(`Creation attempt ${retryCount + 1}/${maxRetries + 1} failed: ${createErr.message}`);
+
+                // Don't retry authentication errors
+                if (createErr.message.includes('Authentication error')) {
+                    throw new Error(`Failed to create collection: ${createErr.message}`);
+                }
+
+                retryCount++;
+
+                if (retryCount <= maxRetries) {
+                    // Exponential backoff with jitter
+                    const delay = Math.min(1000 * Math.pow(2, retryCount - 1) + Math.random() * 1000, 10000);
+                    logger.info(`Waiting ${delay}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                } else {
+                    logger.error(`Failed to create collection after ${maxRetries + 1} attempts`);
+                    throw new Error(`Failed to create or access collection after multiple attempts: ${createErr.message}`);
+                }
             }
-        } catch (createErr) {
-            logger.error(`Failed to create collection: ${createErr.message}`);
-            throw new Error(`Failed to create or access collection: ${createErr.message}`);
         }
     }
 
     return collectionId;
+}
+
+/**
+ * Validates document request parameters
+ * @param {Object} request - The request object
+ * @returns {Object} Object with isValid and error properties
+ */
+function validateDocumentRequest(request) {
+    // Check for required fields
+    if (!request.title) {
+        return {
+            isValid: false,
+            error: "Missing required field: title"
+        };
+    }
+
+    if (!request.content) {
+        return {
+            isValid: false,
+            error: "Missing required field: content"
+        };
+    }
+
+    // Validate content isn't empty
+    if (request.content.trim() === '') {
+        return {
+            isValid: false,
+            error: "Empty document content"
+        };
+    }
+
+    // Title length validation
+    if (request.title.length > 255) {
+        return {
+            isValid: false,
+            error: "Title exceeds maximum length (255 characters)"
+        };
+    }
+
+    return { isValid: true };
+}
+
+/**
+ * Validates sheet import request parameters
+ * @param {Object} request - The request object
+ * @returns {Object} Object with isValid and error properties
+ */
+function validateSheetRequest(request) {
+    // Check for required fields
+    if (!request.fileContent) {
+        return {
+            isValid: false,
+            error: "Missing required field: fileContent"
+        };
+    }
+
+    // Validate file content isn't empty
+    if (!request.fileContent || request.fileContent.trim() === '') {
+        return {
+            isValid: false,
+            error: "Empty file content provided"
+        };
+    }
+
+    // Title length validation if provided
+    if (request.title && request.title.length > 255) {
+        return {
+            isValid: false,
+            error: "Title exceeds maximum length (255 characters)"
+        };
+    }
+
+    return { isValid: true };
 }
 
 /**
@@ -179,9 +338,10 @@ const actions = {
     "saveGoogleDoc": async (request, sendResponse, outlineUrl, apiToken, googleDocsCollectionName) => {
         const controller = createControllerWithTimeout();
         try {
-            // Validate required fields
-            if (!request.title || !request.content) {
-                throw new Error("Missing required fields: title and content are required");
+            // Validate request
+            const validation = validateDocumentRequest(request);
+            if (!validation.isValid) {
+                throw new Error(validation.error);
             }
 
             const api = new OutlineAPI(outlineUrl, apiToken);
@@ -234,9 +394,10 @@ const actions = {
     "importGoogleSheet": async (request, sendResponse, outlineUrl, apiToken, _unused, googleSheetsCollectionName) => {
         const controller = createControllerWithTimeout();
         try {
-            // Validate fileContent
-            if (!request.fileContent) {
-                throw new Error("Missing required field: fileContent");
+            // Validate request
+            const validation = validateSheetRequest(request);
+            if (!validation.isValid) {
+                throw new Error(validation.error);
             }
 
             const api = new OutlineAPI(outlineUrl, apiToken);
@@ -246,11 +407,6 @@ const actions = {
 
             // Prepare file for upload
             const fileContent = request.fileContent;
-            // Validate file content is not empty
-            if (!fileContent || fileContent.trim() === '') {
-                throw new Error("Empty file content provided");
-            }
-
             const fileBlob = new Blob([fileContent], { type: "text/csv" });
             // Use provided title or default name
             const fileName = (request.title || "import") + ".csv";

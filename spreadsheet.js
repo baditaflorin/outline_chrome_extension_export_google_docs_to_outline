@@ -13,24 +13,94 @@
             return;
         }
 
-        // Create and style the "Save to Outline" button.
-        const saveButton = document.createElement("button");
-        saveButton.textContent = "Save to Outline";
-        Object.assign(saveButton.style, {
+        // Create container for the floating button
+        const buttonContainer = document.createElement("div");
+        Object.assign(buttonContainer.style, {
             position: "fixed",
             bottom: "20px",
             right: "20px",
             zIndex: 10000,
-            padding: "10px 20px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            transition: "all 0.3s ease"
+        });
+
+        // Create the icon button
+        const iconButton = document.createElement("div");
+        Object.assign(iconButton.style, {
+            width: "40px",
+            height: "40px",
+            borderRadius: "50%",
+            backgroundColor: "#0071e3",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: "0 2px 10px rgba(0,0,0,0.2)",
+            transition: "transform 0.3s ease, background-color 0.5s ease"
+        });
+        iconButton.dataset.saved = "false";
+
+        // Create icon element (using extension's icon)
+        const iconElement = document.createElement("img");
+        try {
+            iconElement.src = chrome.runtime.getURL("icons/icon48.png");
+            iconElement.onerror = () => {
+                // Fallback to a text icon if image loading fails
+                iconElement.remove();
+                iconButton.textContent = "O";
+                iconButton.style.fontWeight = "bold";
+                iconButton.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+                iconButton.style.fontSize = "16px";
+                iconButton.style.color = "#fff";
+            };
+        } catch (e) {
+            // If chrome.runtime.getURL fails, use text fallback
+            iconButton.textContent = "O";
+            iconButton.style.fontWeight = "bold";
+            iconButton.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+            iconButton.style.fontSize = "16px";
+            iconButton.style.color = "#fff";
+        }
+        iconElement.style.width = "24px";
+        iconElement.style.height = "24px";
+        iconElement.style.objectFit = "contain";
+        iconButton.appendChild(iconElement);
+
+        // Create text label that appears on hover
+        const textLabel = document.createElement("div");
+        textLabel.textContent = "Save to Outline";
+        Object.assign(textLabel.style, {
             backgroundColor: "#0071e3",
             color: "#fff",
-            border: "none",
+            padding: "8px 12px",
             borderRadius: "6px",
-            cursor: "pointer",
-            transition: "background-color 0.5s ease, transform 0.3s ease"
+            marginRight: "10px",
+            opacity: "0",
+            transform: "translateX(10px)",
+            transition: "opacity 0.3s ease, transform 0.3s ease",
+            whiteSpace: "nowrap",
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+            fontSize: "14px",
+            fontWeight: "500"
         });
-        saveButton.dataset.saved = "false";
-        document.body.appendChild(saveButton);
+
+        // Add elements to the container
+        buttonContainer.appendChild(textLabel);
+        buttonContainer.appendChild(iconButton);
+        document.body.appendChild(buttonContainer);
+
+        // Show/hide text on hover
+        buttonContainer.addEventListener("mouseenter", () => {
+            textLabel.style.opacity = "1";
+            textLabel.style.transform = "translateX(0)";
+        });
+
+        buttonContainer.addEventListener("mouseleave", () => {
+            textLabel.style.opacity = "0";
+            textLabel.style.transform = "translateX(10px)";
+        });
 
         let isProcessing = false;
 
@@ -40,8 +110,8 @@
             isProcessing = true;
 
             // If already saved, open the document URL.
-            if (saveButton.dataset.saved === "true") {
-                const url = saveButton.dataset.url;
+            if (iconButton.dataset.saved === "true") {
+                const url = iconButton.dataset.url;
                 if (url) {
                     window.open(url, "_blank");
                 }
@@ -49,15 +119,18 @@
                 return;
             }
 
-            saveButton.disabled = true;
-            saveButton.style.transform = "scale(1.1)";
-            saveButton.textContent = "Sending...";
-            saveButton.dataset.url = "";
+            iconButton.style.pointerEvents = "none";
+            iconButton.style.transform = "scale(1.1)";
+
+            // Update the text label to show progress
+            textLabel.textContent = "Sending...";
+            textLabel.style.opacity = "1";
+            iconButton.dataset.url = "";
 
             // Extract the spreadsheet ID from the URL.
             const match = window.location.pathname.match(/\/spreadsheets\/d\/([^\/]+)/);
             if (!match) {
-                displayError(saveButton, "Invalid Spreadsheet");
+                displayError("Invalid Spreadsheet");
                 isProcessing = false;
                 return;
             }
@@ -140,12 +213,22 @@
                     });
 
                     if (response && response.success) {
-                        saveButton.style.backgroundColor = "green";
-                        saveButton.textContent = "Saved! (Click to view)";
-                        saveButton.dataset.saved = "true";
-                        saveButton.dataset.url = response.url || "";
-                        saveButton.disabled = false;
-                        saveButton.style.transform = "scale(1)";
+                        iconButton.style.backgroundColor = "green";
+                        textLabel.style.backgroundColor = "green";
+                        textLabel.textContent = "Saved! Click to view";
+                        textLabel.style.opacity = "1";
+                        iconButton.dataset.saved = "true";
+                        iconButton.dataset.url = response.url || "";
+                        iconButton.style.pointerEvents = "auto";
+                        iconButton.style.transform = "scale(1)";
+
+                        // Keep the text visible for a moment
+                        setTimeout(() => {
+                            if (!buttonContainer.matches(':hover')) {
+                                textLabel.style.opacity = "0";
+                                textLabel.style.transform = "translateX(10px)";
+                            }
+                        }, 2000);
                     } else {
                         const errorMessage = response && response.error ? response.error : "Unknown error";
                         throw new Error(errorMessage);
@@ -182,23 +265,34 @@
                     errorMessage = "Cancelled";
                 }
 
-                displayError(saveButton, errorMessage);
+                displayError(errorMessage);
             } finally {
                 isProcessing = false;
             }
         }
 
-        function displayError(button, message) {
-            button.style.backgroundColor = "red";
-            button.textContent = message;
+        function displayError(message) {
+            iconButton.style.backgroundColor = "red";
+            textLabel.style.backgroundColor = "red";
+            textLabel.textContent = message;
+            textLabel.style.opacity = "1";
+
             setTimeout(() => {
-                button.style.backgroundColor = "#0071e3";
-                button.textContent = "Save to Outline";
-                button.disabled = false;
-                button.style.transform = "scale(1)";
+                iconButton.style.backgroundColor = "#0071e3";
+                textLabel.style.backgroundColor = "#0071e3";
+                textLabel.textContent = "Save to Outline";
+                iconButton.style.pointerEvents = "auto";
+                iconButton.style.transform = "scale(1)";
+
+                // Hide the text label after showing the error
+                if (!buttonContainer.matches(':hover')) {
+                    textLabel.style.opacity = "0";
+                    textLabel.style.transform = "translateX(10px)";
+                }
             }, 3000);
         }
 
-        saveButton.addEventListener("click", handleClick);
+        // Click handler - Delegate to the container for better UX
+        buttonContainer.addEventListener("click", handleClick);
     });
 })();
