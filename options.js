@@ -2,6 +2,11 @@
 document.getElementById("settings-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const outlineUrl = document.getElementById("outlineUrl").value.trim();
+    if (!isValidUrl(outlineUrl)) {
+        alert("Please enter a valid URL for the Outline API Base URL.");
+        return;
+        }
+
     const apiToken = document.getElementById("apiToken").value.trim();
     // Use default values if the inputs are left empty
     const googleDocsCollectionName = document.getElementById("googleDocsCollectionName").value.trim() || "google-docs";
@@ -77,3 +82,14 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     );
 });
+
+// options.js
+function isValidUrl(url) {
+    try {
+        new URL(url);
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+

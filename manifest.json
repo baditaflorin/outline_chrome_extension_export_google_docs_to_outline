@@ -3,15 +3,23 @@
   "name": "Google Docs/Sheets to Outline",
   "version": "1.2",
   "description": "Save a Google Docs file (exported as Markdown) or a Google Sheet (exported as TSV renamed to CSV) to your Outline wiki.",
-  "permissions": [
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+"permissions": [
     "storage",
     "scripting",
     "notifications"
   ],
+  "optional_permissions": [
+    "https://*/"
+  ],
   "host_permissions": [
     "https://docs.google.com/document/*",
-    "https://docs.google.com/spreadsheets/*",
-    "https://*/*"
+    "https://docs.google.com/spreadsheets/*"
   ],
   "background": {
     "service_worker": "background.js",
