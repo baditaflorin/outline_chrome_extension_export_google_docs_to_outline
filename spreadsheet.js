@@ -89,7 +89,8 @@
 | Source | ${window.location.href} |
 | Author | (Not specified) |
 | Published | (Not specified) |
-| Created | ${now.toISOString().split('T')[0]} |`;
+| Created | ${now.toISOString().split('T')[0]} |
+| Clipped Date | ${now.toISOString()} |`;
 
                 // Wrap chrome.runtime.sendMessage in a promise.
                 const sendMessagePromise = (msg) =>
