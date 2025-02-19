@@ -11,11 +11,12 @@ class OutlineAPI {
      * **Change 2:** Supports cancellation via an optional AbortController signal.
      * **Change 3:** Retries the request automatically for transient errors.
      * **Change 4:** Logs detailed request and response information.
+     * **Change 5:** Implements exponential backoff for retries
      *
      * @param {string} endpoint - The full URL to fetch.
      * @param {Object} options - The fetch options.
      *   - retry {number} (optional): Number of retry attempts on error.
-     *   - retryDelay {number} (optional): Delay between retries in ms (default is 500ms).
+     *   - retryDelay {number} (optional): Initial delay between retries in ms (default is 500ms).
      *   - signal {AbortSignal} (optional): Abort signal to cancel the request.
      *   - ...rest: All other options passed to fetch.
      * @returns {Promise<Object>} The parsed JSON response.
@@ -77,8 +78,14 @@ class OutlineAPI {
 
                     // For server errors, retry if we have attempts left
                     if (attempts < maxAttempts) {
-                        console.warn(`[WARNING] Server error (${statusCode}). Retry ${attempts}/${retry}...`);
-                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        // Calculate exponential backoff with jitter
+                        const baseDelay = retryDelay * Math.pow(2, attempts - 1);
+                        // Add random jitter (±20%)
+                        const jitter = baseDelay * 0.2 * (Math.random() * 2 - 1);
+                        const delayWithJitter = Math.max(0, Math.floor(baseDelay + jitter));
+
+                        console.warn(`[WARNING] Server error (${statusCode}). Retry ${attempts}/${retry} in ${delayWithJitter}ms...`);
+                        await new Promise(resolve => setTimeout(resolve, delayWithJitter));
                         continue;
                     }
 
@@ -104,8 +111,13 @@ class OutlineAPI {
                 // Handle network errors (offline, connection refused, etc.)
                 if (error.name === 'TypeError' && error.message.includes('network')) {
                     if (attempts < maxAttempts) {
-                        console.warn(`[WARNING] Network error: ${error.message}. Retrying in ${retryDelay}ms...`);
-                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        // Use exponential backoff for network errors too
+                        const backoffDelay = retryDelay * Math.pow(2, attempts - 1);
+                        const jitter = backoffDelay * 0.2 * (Math.random() * 2 - 1);
+                        const delayWithJitter = Math.max(0, Math.floor(backoffDelay + jitter));
+
+                        console.warn(`[WARNING] Network error: ${error.message}. Retrying in ${delayWithJitter}ms...`);
+                        await new Promise(resolve => setTimeout(resolve, delayWithJitter));
                         continue;
                     }
                     throw new Error(`Network error: ${error.message}. Please check your internet connection.`);
@@ -114,10 +126,15 @@ class OutlineAPI {
                 // For other errors, retry if we have attempts left
                 if (attempts < maxAttempts && !error.message.includes('Authentication error') &&
                     !error.message.includes('Resource not found')) {
+                    // Use exponential backoff for all retryable errors
+                    const backoffDelay = retryDelay * Math.pow(2, attempts - 1);
+                    const jitter = backoffDelay * 0.2 * (Math.random() * 2 - 1);
+                    const delayWithJitter = Math.max(0, Math.floor(backoffDelay + jitter));
+
                     console.warn(
-                        `[WARNING] Request failed (attempt ${attempts}/${maxAttempts}): ${error.message}. Retrying in ${retryDelay}ms...`
+                        `[WARNING] Request failed (attempt ${attempts}/${maxAttempts}): ${error.message}. Retrying in ${delayWithJitter}ms...`
                     );
-                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                    await new Promise(resolve => setTimeout(resolve, delayWithJitter));
                     continue;
                 }
 
@@ -147,7 +164,8 @@ class OutlineAPI {
             const result = await this._request(endpoint, {
                 method: "POST",
                 body: JSON.stringify(payload),
-                retry: 2
+                retry: 3,
+                retryDelay: 1000
             });
             console.log(`Collection created successfully: ${JSON.stringify(result)}`);
             return result.data.id;
@@ -174,7 +192,8 @@ class OutlineAPI {
             const result = await this._request(endpoint, {
                 method: "POST",
                 body: JSON.stringify(payload),
-                retry: 1
+                retry: 2,
+                retryDelay: 1000
             });
             console.log(`Document created successfully: ${JSON.stringify(result)}`);
             return result;
@@ -205,7 +224,8 @@ class OutlineAPI {
             const result = await this._request(endpoint, {
                 method: "POST",
                 body: formData, // Do not set Content-Type header for FormData.
-                retry: 1
+                retry: 2,
+                retryDelay: 1000
             });
             console.log(`Document imported successfully: ${JSON.stringify(result)}`);
             return result;
@@ -229,7 +249,8 @@ class OutlineAPI {
             const result = await this._request(endpoint, {
                 method: "POST",
                 body: JSON.stringify(payload),
-                retry: 1
+                retry: 2,
+                retryDelay: 1000
             });
             console.log(`Document ${id} updated successfully: ${JSON.stringify(result)}`);
             return result;
@@ -252,7 +273,8 @@ class OutlineAPI {
             const result = await this._request(endpoint, {
                 method: "POST",
                 body: JSON.stringify({ id }),
-                retry: 1
+                retry: 2,
+                retryDelay: 1000
             });
             console.log(`Fetched document info: ${JSON.stringify(result)}`);
             return result;
@@ -275,7 +297,8 @@ class OutlineAPI {
             const result = await this._request(endpoint, {
                 method: "POST",
                 body: JSON.stringify({ id: collectionId }),
-                retry: 1
+                retry: 2,
+                retryDelay: 1000
             });
             console.log(`Fetched collection info: ${JSON.stringify(result)}`);
 
